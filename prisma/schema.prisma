@@ -70,6 +70,8 @@ model Member {
   casillero      Locker?
   ejercicios     Exercise[]
   planSemanal    WeekPlan[]
+  plantillas     SessionTemplate[]
+  notasEjercicio ExerciseNote[]
 
   @@index([apellidos, nombres])
 }
@@ -539,9 +541,11 @@ model Exercise {
   memberId  String?
   createdAt DateTime @default(now())
 
-  member  Member?           @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  series  WorkoutSet[]
-  rutinas RoutineExercise[]
+  member     Member?               @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  series     WorkoutSet[]
+  rutinas    RoutineExercise[]
+  plantillas SessionTemplateItem[]
+  notas      ExerciseNote[]
 
   @@index([nombre])
   @@index([memberId])
@@ -703,4 +707,47 @@ model Locker {
   ocupadoDesde DateTime?
 
   member Member? @relation(fields: [memberId], references: [id], onDelete: SetNull)
+}
+
+/// Plantilla de sesion del socio: "Mi dia de pecho" con sus ejercicios.
+/// Se carga entera con un toque y guia lo que falta anotar ese dia.
+model SessionTemplate {
+  id        String   @id @default(cuid())
+  memberId  String
+  nombre    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  member Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  items  SessionTemplateItem[]
+
+  @@index([memberId])
+}
+
+model SessionTemplateItem {
+  id           String @id @default(cuid())
+  templateId   String
+  exerciseId   String
+  series       Int    @default(3)
+  /// Texto libre: "10", "8-12", "al fallo"
+  repeticiones String @default("10")
+  orden        Int    @default(0)
+
+  template SessionTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  exercise Exercise        @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+}
+
+/// Nota fija del socio sobre un ejercicio: "asiento en 4", "agarre cerrado".
+/// Aparece cada vez que lo elige; no es por sesion.
+model ExerciseNote {
+  id         String   @id @default(cuid())
+  memberId   String
+  exerciseId String
+  nota       String
+  updatedAt  DateTime @updatedAt
+
+  member   Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  exercise Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, exerciseId])
 }

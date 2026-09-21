@@ -70,6 +70,28 @@ class PlanSemanalDto {
   dias: DiaPlanDto[];
 }
 
+class NotaDto {
+  @IsString() @MaxLength(140, { message: 'La nota puede tener hasta 140 caracteres' }) nota: string;
+}
+
+class ItemPlantillaDto {
+  @IsString() exerciseId: string;
+  @IsInt() @Min(1) @Max(10) series: number;
+  @IsString() @MaxLength(20) repeticiones: string;
+}
+
+class PlantillaDto {
+  @IsString() @MaxLength(40) nombre: string;
+  @IsArray() @ArrayMinSize(1, { message: 'La plantilla necesita al menos un ejercicio' }) @ArrayMaxSize(20)
+  @ValidateNested({ each: true }) @Type(() => ItemPlantillaDto)
+  items: ItemPlantillaDto[];
+}
+
+class PlantillaDesdeDiaDto {
+  @IsString() @MaxLength(40) nombre: string;
+  @IsOptional() @IsString() fecha?: string;
+}
+
 class PesoDto {
   @IsOptional() @IsString() fecha?: string;
   @IsNumber() @Min(20) @Max(400) pesoKg: number;
@@ -168,6 +190,37 @@ export class PortalController {
   @Get('exercises/:id/last')
   ultimaSesion(@SesionActual() sesion: Sesion, @Param('id') id: string) {
     return this.training.ultimaSesion(this.soloSocio(sesion), id);
+  }
+
+  @Put('exercises/:id/note')
+  guardarNota(@SesionActual() sesion: Sesion, @Param('id') id: string, @Body() dto: NotaDto) {
+    return this.training.guardarNota(this.soloSocio(sesion), id, dto.nota);
+  }
+
+  @Get('templates')
+  plantillas(@SesionActual() sesion: Sesion) {
+    return this.training.plantillas(this.soloSocio(sesion));
+  }
+
+  @Post('templates')
+  crearPlantilla(@SesionActual() sesion: Sesion, @Body() dto: PlantillaDto) {
+    return this.training.crearPlantilla(this.soloSocio(sesion), dto);
+  }
+
+  /** Guarda como plantilla lo anotado en un dia (hoy si no se indica). */
+  @Post('templates/from-day')
+  plantillaDesdeDia(@SesionActual() sesion: Sesion, @Body() dto: PlantillaDesdeDiaDto) {
+    return this.training.plantillaDesdeDia(this.soloSocio(sesion), dto.nombre, dto.fecha);
+  }
+
+  @Put('templates/:id')
+  editarPlantilla(@SesionActual() sesion: Sesion, @Param('id') id: string, @Body() dto: PlantillaDto) {
+    return this.training.editarPlantilla(this.soloSocio(sesion), id, dto);
+  }
+
+  @Delete('templates/:id')
+  borrarPlantilla(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.borrarPlantilla(this.soloSocio(sesion), id);
   }
 
   @Delete('workouts/:id')

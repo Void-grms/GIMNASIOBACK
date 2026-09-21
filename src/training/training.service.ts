@@ -172,7 +172,7 @@ export class TrainingService {
       where: { memberId, exerciseId, fecha: { lt: hoy } },
       orderBy: { fecha: 'desc' },
     });
-    const [series, mejor, deHoy] = await Promise.all([
+    const [series, mejor, deHoy, nota] = await Promise.all([
       anterior
         ? this.prisma.workoutSet.findMany({
             where: { memberId, exerciseId, fecha: anterior.fecha },
@@ -181,13 +181,148 @@ export class TrainingService {
         : Promise.resolve([]),
       this.prisma.workoutSet.aggregate({ where: { memberId, exerciseId }, _max: { pesoKg: true } }),
       this.prisma.workoutSet.count({ where: { memberId, exerciseId, fecha: hoy } }),
+      this.prisma.exerciseNote.findUnique({ where: { memberId_exerciseId: { memberId, exerciseId } } }),
     ]);
     return {
       dia: anterior ? formatoDia(anterior.fecha) : null,
       series: series.map((s) => ({ repeticiones: s.repeticiones, pesoKg: s.pesoKg })),
       mejorPeso: mejor._max.pesoKg ?? null,
       seriesHoy: deHoy,
+      nota: nota?.nota ?? '',
     };
+  }
+
+  // ------------------------------------------------------------ notas
+
+  /** Nota fija del socio sobre un ejercicio. Vacia = se borra. */
+  async guardarNota(memberId: string, exerciseId: string, nota: string) {
+    await this.ejercicioUsable(memberId, exerciseId);
+    const limpia = (nota || '').trim().replace(/\s+/g, ' ').slice(0, 140);
+    if (!limpia) {
+      await this.prisma.exerciseNote.deleteMany({ where: { memberId, exerciseId } });
+      return { nota: '' };
+    }
+    const n = await this.prisma.exerciseNote.upsert({
+      where: { memberId_exerciseId: { memberId, exerciseId } },
+      update: { nota: limpia },
+      create: { memberId, exerciseId, nota: limpia },
+    });
+    return { nota: n.nota };
+  }
+
+  // -------------------------------------------------------- plantillas
+
+  private readonly MAX_PLANTILLAS = 20;
+
+  async plantillas(memberId: string) {
+    const [lista, notas] = await Promise.all([
+      this.prisma.sessionTemplate.findMany({
+        where: { memberId },
+        orderBy: { updatedAt: 'desc' },
+        include: { items: { orderBy: { orden: 'asc' }, include: { exercise: true } } },
+      }),
+      this.prisma.exerciseNote.findMany({ where: { memberId } }),
+    ]);
+    const notaDe = new Map(notas.map((n) => [n.exerciseId, n.nota]));
+    return lista.map((t) => ({
+      id: t.id,
+      nombre: t.nombre,
+      grupos: Array.from(new Set(t.items.map((i) => i.exercise.grupo))),
+      items: t.items
+        // Un ejercicio propio que el socio quito deja de aparecer en la plantilla.
+        .filter((i) => i.exercise.activo)
+        .map((i) => ({
+          exerciseId: i.exerciseId,
+          nombre: i.exercise.nombre,
+          grupo: i.exercise.grupo,
+          series: i.series,
+          repeticiones: i.repeticiones,
+          nota: notaDe.get(i.exerciseId) ?? '',
+        })),
+    }));
+  }
+
+  private async validarItems(memberId: string, items: { exerciseId: string; series: number; repeticiones: string }[]) {
+    if (!items?.length) throw new BadRequestException('La plantilla necesita al menos un ejercicio');
+    if (items.length > 20) throw new BadRequestException('Maximo 20 ejercicios por plantilla');
+    for (const i of items) await this.ejercicioUsable(memberId, i.exerciseId);
+    return items.map((i, orden) => ({
+      exerciseId: i.exerciseId,
+      series: Math.min(10, Math.max(1, Math.round(Number(i.series) || 3))),
+      repeticiones: String(i.repeticiones || '10').trim().slice(0, 20) || '10',
+      orden,
+    }));
+  }
+
+  private nombrePlantilla(nombre: string) {
+    const limpio = (nombre || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (limpio.length < 2) throw new BadRequestException('Ponle un nombre a la plantilla');
+    return limpio;
+  }
+
+  async crearPlantilla(
+    memberId: string,
+    dto: { nombre: string; items: { exerciseId: string; series: number; repeticiones: string }[] },
+  ) {
+    const total = await this.prisma.sessionTemplate.count({ where: { memberId } });
+    if (total >= this.MAX_PLANTILLAS) {
+      throw new BadRequestException(`Puedes guardar hasta ${this.MAX_PLANTILLAS} plantillas. Borra alguna que no uses.`);
+    }
+    const items = await this.validarItems(memberId, dto.items);
+    const t = await this.prisma.sessionTemplate.create({
+      data: { memberId, nombre: this.nombrePlantilla(dto.nombre), items: { create: items } },
+    });
+    return { id: t.id };
+  }
+
+  private async plantillaPropia(memberId: string, id: string) {
+    const t = await this.prisma.sessionTemplate.findUnique({ where: { id } });
+    if (!t || t.memberId !== memberId) throw new ForbiddenException('Esa plantilla no es tuya');
+    return t;
+  }
+
+  async editarPlantilla(
+    memberId: string,
+    id: string,
+    dto: { nombre: string; items: { exerciseId: string; series: number; repeticiones: string }[] },
+  ) {
+    await this.plantillaPropia(memberId, id);
+    const items = await this.validarItems(memberId, dto.items);
+    await this.prisma.$transaction([
+      this.prisma.sessionTemplateItem.deleteMany({ where: { templateId: id } }),
+      this.prisma.sessionTemplate.update({
+        where: { id },
+        data: { nombre: this.nombrePlantilla(dto.nombre), items: { create: items } },
+      }),
+    ]);
+    return { id };
+  }
+
+  async borrarPlantilla(memberId: string, id: string) {
+    await this.plantillaPropia(memberId, id);
+    await this.prisma.sessionTemplate.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  /**
+   * "Guardar lo de hoy como plantilla": toma los ejercicios anotados ese dia,
+   * en el orden en que se hicieron, con sus series y las repeticiones de la
+   * primera serie.
+   */
+  async plantillaDesdeDia(memberId: string, nombre: string, fecha?: string) {
+    const dia = fechaDesdeTexto(fecha, hoyLima());
+    const series = await this.prisma.workoutSet.findMany({
+      where: { memberId, fecha: dia },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!series.length) throw new BadRequestException('Ese dia no tiene ejercicios anotados');
+    const porEjercicio = new Map<string, { exerciseId: string; series: number; repeticiones: string }>();
+    for (const s of series) {
+      const e = porEjercicio.get(s.exerciseId);
+      if (e) e.series += 1;
+      else porEjercicio.set(s.exerciseId, { exerciseId: s.exerciseId, series: 1, repeticiones: String(s.repeticiones) });
+    }
+    return this.crearPlantilla(memberId, { nombre, items: Array.from(porEjercicio.values()) });
   }
 
   async borrarSerie(memberId: string, id: string) {
