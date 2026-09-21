@@ -1,0 +1,518 @@
+// Esquema del sistema de gimnasio.
+// Desarrollo sobre SQLite; para pasar a PostgreSQL basta cambiar el provider
+// y la DATABASE_URL (los tipos usados aqui son compatibles con ambos).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Personal del gimnasio (admin / recepcion). Los socios NO viven aqui.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  nombre       String
+  rol          String   @default("recepcion") // admin | recepcion
+  activo       Boolean  @default(true)
+  intentosFallidos Int  @default(0)
+  bloqueadoHasta DateTime?
+  createdAt    DateTime @default(now())
+
+  pagosCobrados Payment[]
+  ventas        Sale[]
+  cierresCaja   CashClose[]
+}
+
+/// Socio del gimnasio.
+model Member {
+  id              String   @id @default(cuid())
+  dni             String   @unique
+  nombres         String
+  apellidos       String
+  telefono        String?
+  email           String?
+  direccion       String?
+  fotoUrl         String?
+  esUniversitario Boolean  @default(false)
+  /// PIN de 4 digitos para entrar al portal. Se genera al azar en el alta.
+  pinHash         String
+  /// Mientras sea false, el portal obliga a cambiarlo antes de seguir.
+  pinCambiado     Boolean  @default(false)
+  intentosFallidos Int     @default(0)
+  bloqueadoHasta  DateTime?
+  notas           String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships  Membership[]
+  checkIns     CheckIn[]
+  payments     Payment[]
+  credential   Credential?
+  preCheckIns  PreCheckIn[]
+  ventas       Sale[]
+  avisos       Notification[]
+  consents     Consent[]
+  complaints   Complaint[]
+  invitados    GuestPass[]
+  entrenamientos WorkoutSet[]
+  medidas      BodyLog[]
+
+  @@index([apellidos, nombres])
+}
+
+/// Catalogo de planes. Precio y duracion en dias.
+model Plan {
+  id                String   @id @default(cuid())
+  nombre            String
+  precio            Float
+  duracionDias      Int
+  /// true cuando el plan exige evidencia (p. ej. carne universitario vigente)
+  requiereEvidencia Boolean  @default(false)
+  descripcion       String?
+  activo            Boolean  @default(true)
+  orden             Int      @default(0)
+  createdAt         DateTime @default(now())
+
+  memberships Membership[]
+}
+
+/// Una membresia comprada por un socio. El pase diario es una membresia de 1 dia.
+model Membership {
+  id            String   @id @default(cuid())
+  memberId      String
+  planId        String
+  /// Fecha de inicio, normalizada a las 00:00 hora de Lima
+  fechaInicio   DateTime
+  /// Ultimo dia valido inclusive: inicio + (duracionDias - 1)
+  fechaFin      DateTime
+  precioPagado  Float
+  estado        String   @default("activa") // activa | anulada
+  observacion   String?
+  createdAt     DateTime @default(now())
+
+  member   Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  plan     Plan      @relation(fields: [planId], references: [id])
+  payments Payment[]
+  checkIns CheckIn[]
+
+  @@index([memberId, fechaFin])
+}
+
+/// Movimiento de dinero. Todo pago deja rastro de quien lo cobro.
+model Payment {
+  id            String   @id @default(cuid())
+  memberId      String?
+  membershipId  String?
+  saleId        String?  @unique
+  /// membresia | producto
+  concepto      String   @default("membresia")
+  monto         Float
+  metodo        String   // efectivo | yape | plin | tarjeta | transferencia
+  fecha         DateTime @default(now())
+  cajeroId      String?
+  comprobanteId String?
+  nota          String?
+
+  member     Member?     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id])
+  cajero     User?       @relation(fields: [cajeroId], references: [id])
+  sale       Sale?       @relation(fields: [saleId], references: [id])
+  receipt    Receipt?
+
+  @@index([fecha])
+}
+
+/// Evento de ingreso. Se registran tambien los intentos denegados.
+model CheckIn {
+  id           String   @id @default(cuid())
+  memberId     String
+  membershipId String?
+  timestamp    DateTime @default(now())
+  /// entrada | salida. El escaneo alterna solo segun donde este el socio.
+  tipo         String   @default("entrada")
+  metodo       String   // qr | manual | prechequeo | huella | auto
+  dispositivo  String?
+  resultado    String   // permitido | denegado
+  motivo       String?
+
+  member     Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id])
+
+  @@index([timestamp])
+  @@index([memberId, timestamp])
+}
+
+/// Secreto por socio para generar su QR rotativo. Revocable sin tocar al socio.
+model Credential {
+  id        String   @id @default(cuid())
+  memberId  String   @unique
+  tipo      String   @default("qr") // qr | huella
+  secret    String
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+/// Aviso de "estoy entrando" desde el celular del socio.
+/// Es un atajo para recepcion, NO una autorizacion: el ingreso se registra
+/// recien cuando recepcion confirma.
+model PreCheckIn {
+  id          String   @id @default(cuid())
+  memberId    String
+  /// entrada | salida
+  tipo        String   @default("entrada")
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+  estado      String   @default("pendiente") // pendiente | confirmado | expirado | descartado
+  confirmedAt DateTime?
+  checkInId   String?
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([estado, expiresAt])
+}
+
+/// Producto de mostrador: agua, suplementos, alquiler de casillero.
+model Product {
+  id          String   @id @default(cuid())
+  nombre      String
+  precio      Float
+  stock       Int      @default(0)
+  stockMinimo Int      @default(3)
+  /// true para servicios sin inventario (alquiler de casillero, por ejemplo)
+  esServicio  Boolean  @default(false)
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  items SaleItem[]
+}
+
+/// Venta de mostrador. Puede ir a nombre de un socio o de un visitante.
+model Sale {
+  id       String   @id @default(cuid())
+  memberId String?
+  total    Float
+  metodo   String
+  cajeroId String?
+  fecha    DateTime @default(now())
+  nota     String?
+
+  items   SaleItem[]
+  member  Member?  @relation(fields: [memberId], references: [id])
+  cajero  User?    @relation(fields: [cajeroId], references: [id])
+  payment Payment?
+
+  @@index([fecha])
+}
+
+model SaleItem {
+  id              String @id @default(cuid())
+  saleId          String
+  productId       String
+  cantidad        Int
+  precioUnitario  Float
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+}
+
+/// Arqueo de caja: lo que dice el sistema contra lo que hay en el cajon.
+model CashClose {
+  id           String   @id @default(cuid())
+  cajeroId     String?
+  desde        DateTime
+  hasta        DateTime
+  montoSistema Float
+  montoContado Float
+  diferencia   Float
+  detalle      String?
+  nota         String?
+  createdAt    DateTime @default(now())
+
+  cajero User? @relation(fields: [cajeroId], references: [id])
+
+  @@index([createdAt])
+}
+
+/// Aviso de vencimiento. Se registra al marcarlo como enviado para no repetirlo.
+model Notification {
+  id        String   @id @default(cuid())
+  memberId  String
+  /// por_vencer | vencido
+  tipo      String
+  canal     String   @default("whatsapp")
+  mensaje   String
+  enviadoAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, tipo, enviadoAt])
+}
+
+/// Datos del negocio y reglas fiscales. Una sola fila, id "default".
+/// El regimen decide si hay IGV y si se puede emitir factura, asi que cambiar
+/// de NRUS a RER no toca ni una linea de codigo.
+model Settings {
+  id               String   @id @default("default")
+  razonSocial      String   @default("Mi gimnasio")
+  nombreComercial  String   @default("Mi gimnasio")
+  ruc              String   @default("")
+  direccionFiscal  String   @default("")
+  telefono         String   @default("")
+  email            String   @default("")
+  /// nrus | rer | rmt | general
+  regimen          String   @default("nrus")
+  igvTasa          Float    @default(0.18)
+  /// Cuando el importe de una boleta supera esto, SUNAT exige identificar al cliente.
+  umbralDocumento  Float    @default(700)
+  /// Pases de invitado gratuitos que puede dar cada socio por mes.
+  invitadosPorMes  Int      @default(1)
+  ultimoRespaldoAt DateTime?
+  ultimoRespaldoArchivo String @default("")
+  /// ninguno | nubefact
+  pseProveedor     String   @default("ninguno")
+  pseRuc           String   @default("")
+  pseToken         String   @default("")
+  pseUrl           String   @default("")
+  /// Textos legales versionados: se guarda que version acepto cada socio.
+  terminosVersion  String   @default("1.0")
+  terminosTexto    String   @default("")
+  privacidadVersion String  @default("1.0")
+  privacidadTexto  String   @default("")
+  consentimientoVersion String @default("1.0")
+  consentimientoTexto   String @default("")
+  actualizadoAt    DateTime @updatedAt
+}
+
+/// Numeracion correlativa por tipo de comprobante. Se incrementa dentro de una
+/// transaccion para que dos cobros simultaneos no compartan numero.
+model Serie {
+  id          String @id @default(cuid())
+  /// boleta | factura | recibo
+  tipo        String
+  serie       String
+  correlativo Int    @default(0)
+  activa      Boolean @default(true)
+
+  @@unique([tipo, serie])
+}
+
+/// Comprobante de pago emitido. Guarda los campos que exige SUNAT aunque el
+/// envio electronico todavia no este conectado.
+model Receipt {
+  id               String   @id @default(cuid())
+  /// boleta | factura | recibo
+  tipo             String
+  /// 03 boleta, 01 factura, vacio para el recibo interno
+  codigoSunat      String   @default("")
+  serie            String
+  numero           Int
+
+  /// Emisor congelado al momento de emitir: si manana cambia la razon social,
+  /// el comprobante viejo debe seguir diciendo lo que decia.
+  emisorRuc        String
+  emisorRazon      String
+  emisorDireccion  String
+
+  /// dni | ruc | ce | pasaporte | sin_documento
+  clienteTipoDoc   String
+  clienteNumDoc    String?
+  clienteNombre    String
+  clienteDireccion String?
+
+  moneda           String   @default("PEN")
+  /// Valor de venta sin IGV
+  gravado          Float
+  igv              Float
+  /// Operaciones sin IGV (NRUS y exonerados)
+  inafecto         Float    @default(0)
+  total            Float
+  igvTasa          Float    @default(0)
+
+  /// no_aplica | pendiente | enviado | aceptado | rechazado
+  estadoSunat      String   @default("no_aplica")
+  sunatMensaje     String?
+  sunatHash        String?
+  sunatEnlace      String?
+
+  anulado          Boolean  @default(false)
+  motivoAnulacion  String?
+  anuladoAt        DateTime?
+
+  observacion      String?
+  emitidoAt        DateTime @default(now())
+
+  paymentId        String?  @unique
+  payment          Payment? @relation(fields: [paymentId], references: [id])
+  items            ReceiptItem[]
+
+  @@unique([tipo, serie, numero])
+  @@index([emitidoAt])
+}
+
+model ReceiptItem {
+  id             String @id @default(cuid())
+  receiptId      String
+  descripcion    String
+  cantidad       Float  @default(1)
+  /// Sin IGV
+  valorUnitario  Float
+  /// Con IGV, que es el que ve el cliente
+  precioUnitario Float
+  igv            Float  @default(0)
+  total          Float
+
+  receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+}
+
+/// Libro de reclamaciones virtual (Codigo del Consumidor, Ley 29571).
+/// Los campos siguen el formato del anexo del reglamento.
+model Complaint {
+  id             String   @id @default(cuid())
+  codigo         String   @unique
+
+  /// reclamo (disconformidad con el servicio) | queja (malestar con la atencion)
+  tipo           String
+
+  nombre         String
+  tipoDoc        String
+  numDoc         String
+  telefono       String?
+  email          String
+  direccion      String?
+  esMenorDeEdad  Boolean  @default(false)
+  apoderado      String?
+
+  /// producto | servicio
+  bienTipo       String
+  bienDescripcion String
+  montoReclamado Float?
+
+  detalle        String
+  pedido         String
+
+  /// pendiente | respondido
+  estado         String   @default("pendiente")
+  respuesta      String?
+  respondidoAt   DateTime?
+  respondidoPor  String?
+  /// 15 dias habiles desde el registro
+  plazoLimite    DateTime
+
+  memberId       String?
+  member         Member?  @relation(fields: [memberId], references: [id])
+  createdAt      DateTime @default(now())
+
+  @@index([estado, plazoLimite])
+}
+
+/// Consentimiento expreso, especifico e informado (Ley 29733 y DS 016-2024-JUS).
+/// Se guarda el texto y su version: probar que consintio exige saber a que.
+model Consent {
+  id        String   @id @default(cuid())
+  memberId  String
+  /// datos_personales | terminos | biometrico | marketing
+  tipo      String
+  version   String
+  aceptado  Boolean  @default(true)
+  texto     String
+  origen    String   @default("recepcion")
+  ip        String?
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, tipo])
+}
+
+/// Intento de inicio de sesion. Sirve para bloquear fuerza bruta y para poder
+/// mirar despues quien estuvo probando.
+model LoginAttempt {
+  id            String   @id @default(cuid())
+  /// staff | socio
+  tipo          String
+  identificador String
+  exito         Boolean
+  ip            String?
+  createdAt     DateTime @default(now())
+
+  @@index([identificador, createdAt])
+}
+
+/// Pase de invitado. Cada socio puede traer a alguien gratis dentro de su cupo
+/// mensual; el invitado queda registrado y se puede seguir si despues se inscribe.
+model GuestPass {
+  id         String   @id @default(cuid())
+  memberId   String
+  nombre     String
+  dni        String
+  telefono   String?
+  /// Mes del cupo consumido, en formato YYYY-MM
+  periodo    String
+  convertido Boolean  @default(false)
+  nota       String?
+  createdAt  DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, periodo])
+  @@index([createdAt])
+}
+
+/// Catalogo de ejercicios. Se siembra con los habituales y el socio puede
+/// agregar los suyos.
+model Exercise {
+  id      String  @id @default(cuid())
+  nombre  String  @unique
+  grupo   String  @default("general")
+  activo  Boolean @default(true)
+
+  series WorkoutSet[]
+}
+
+/// Una serie registrada: que ejercicio, cuantas repeticiones y con cuanto peso.
+/// El progreso sale de comparar estas filas en el tiempo.
+model WorkoutSet {
+  id           String   @id @default(cuid())
+  memberId     String
+  exerciseId   String
+  /// Dia de entrenamiento, normalizado a medianoche del dia de Lima
+  fecha        DateTime
+  serie        Int      @default(1)
+  repeticiones Int
+  pesoKg       Float
+  nota         String?
+  createdAt    DateTime @default(now())
+
+  member   Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  exercise Exercise @relation(fields: [exerciseId], references: [id])
+
+  @@index([memberId, fecha])
+  @@index([memberId, exerciseId, fecha])
+}
+
+/// Peso corporal y medidas que el socio anota si quiere.
+///
+/// Es informacion de salud: solo se guarda con consentimiento aparte y el socio
+/// puede borrarla cuando quiera.
+model BodyLog {
+  id        String   @id @default(cuid())
+  memberId  String
+  fecha     DateTime
+  pesoKg    Float
+  cinturaCm Float?
+  nota      String?
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, fecha])
+  @@index([memberId, fecha])
+}
