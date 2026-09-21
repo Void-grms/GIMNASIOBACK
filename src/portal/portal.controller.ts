@@ -1,15 +1,15 @@
 import {
-  Body, Controller, Delete, ForbiddenException, Get, Ip, Param, Patch, Post, Query, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, Ip, Param, Patch, Post, Put, Query, UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Length, Max,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Length, Max,
   MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { PortalService } from './portal.service';
 import { CheckinsService } from '../checkins/checkins.service';
-import { TrainingService } from '../training/training.service';
+import { GRUPOS_VALIDOS, TrainingService } from '../training/training.service';
 import { Publico } from '../auth/publico.decorator';
 import { SesionActual } from '../auth/sesion.decorator';
 import type { Sesion } from '../auth/jwt.guard';
@@ -40,12 +40,34 @@ class EntrenamientoDto {
   @IsOptional() @IsString() fecha?: string;
   @IsOptional() @IsString() exerciseId?: string;
   @IsOptional() @IsString() @MaxLength(80) nombreEjercicio?: string;
+  @IsOptional() @IsIn(GRUPOS_VALIDOS) grupo?: string;
 
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20)
   @ValidateNested({ each: true }) @Type(() => SerieDto)
   series: SerieDto[];
 
   @IsOptional() @IsString() @MaxLength(200) nota?: string;
+}
+
+class EjercicioDto {
+  @IsString() @MaxLength(60) nombre: string;
+  @IsIn(GRUPOS_VALIDOS, { message: 'Elige la zona del ejercicio' }) grupo: string;
+}
+
+class EditarEjercicioDto {
+  @IsOptional() @IsString() @MaxLength(60) nombre?: string;
+  @IsOptional() @IsIn(GRUPOS_VALIDOS) grupo?: string;
+}
+
+class DiaPlanDto {
+  @IsInt() @Min(1) @Max(7) diaSemana: number;
+  @IsOptional() @IsString() @MaxLength(40) titulo?: string;
+  @IsArray() @ArrayMaxSize(9) @IsIn(GRUPOS_VALIDOS, { each: true }) grupos: string[];
+}
+
+class PlanSemanalDto {
+  @IsArray() @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => DiaPlanDto)
+  dias: DiaPlanDto[];
 }
 
 class PesoDto {
@@ -122,9 +144,50 @@ export class PortalController {
 
   // --------------------------------------------------------- entrenamiento
 
+  /** Catalogo del gimnasio y, si es un socio, tambien los ejercicios que creo. */
   @Get('exercises')
-  ejercicios() {
-    return this.training.listarEjercicios();
+  ejercicios(@SesionActual() sesion: Sesion) {
+    return this.training.listarEjercicios(sesion?.tipo === 'socio' ? sesion.sub : undefined);
+  }
+
+  @Post('exercises')
+  crearEjercicio(@SesionActual() sesion: Sesion, @Body() dto: EjercicioDto) {
+    return this.training.crearEjercicio(this.soloSocio(sesion), dto.nombre, dto.grupo);
+  }
+
+  @Patch('exercises/:id')
+  editarEjercicio(@SesionActual() sesion: Sesion, @Param('id') id: string, @Body() dto: EditarEjercicioDto) {
+    return this.training.editarEjercicio(this.soloSocio(sesion), id, dto);
+  }
+
+  @Delete('exercises/:id')
+  borrarEjercicio(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.borrarEjercicio(this.soloSocio(sesion), id);
+  }
+
+  @Get('exercises/:id/last')
+  ultimaSesion(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.ultimaSesion(this.soloSocio(sesion), id);
+  }
+
+  @Delete('workouts/:id')
+  borrarSerie(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.borrarSerie(this.soloSocio(sesion), id);
+  }
+
+  @Get('week')
+  semana(@SesionActual() sesion: Sesion, @Query('desde') desde?: string) {
+    return this.training.semana(this.soloSocio(sesion), desde);
+  }
+
+  @Get('week-plan')
+  planSemanal(@SesionActual() sesion: Sesion) {
+    return this.training.planSemanal(this.soloSocio(sesion));
+  }
+
+  @Put('week-plan')
+  guardarPlan(@SesionActual() sesion: Sesion, @Body() dto: PlanSemanalDto) {
+    return this.training.guardarPlanSemanal(this.soloSocio(sesion), dto.dias);
   }
 
   @Get('my-exercises')

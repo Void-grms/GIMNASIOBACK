@@ -68,6 +68,8 @@ model Member {
   rutinas        RoutineAssignment[]
   renovaciones   RenewalRequest[]
   casillero      Locker?
+  ejercicios     Exercise[]
+  planSemanal    WeekPlan[]
 
   @@index([apellidos, nombres])
 }
@@ -309,44 +311,44 @@ model Notification {
 /// El regimen decide si hay IGV y si se puede emitir factura, asi que cambiar
 /// de NRUS a RER no toca ni una linea de codigo.
 model Settings {
-  id                    String    @id @default("default")
-  razonSocial           String    @default("Mi gimnasio")
-  nombreComercial       String    @default("Mi gimnasio")
-  ruc                   String    @default("")
-  direccionFiscal       String    @default("")
-  telefono              String    @default("")
-  email                 String    @default("")
+  id                     String    @id @default("default")
+  razonSocial            String    @default("Mi gimnasio")
+  nombreComercial        String    @default("Mi gimnasio")
+  ruc                    String    @default("")
+  direccionFiscal        String    @default("")
+  telefono               String    @default("")
+  email                  String    @default("")
   /// nrus | rer | rmt | general
-  regimen               String    @default("nrus")
-  igvTasa               Float     @default(0.18)
+  regimen                String    @default("nrus")
+  igvTasa                Float     @default(0.18)
   /// Cuando el importe de una boleta supera esto, SUNAT exige identificar al cliente.
-  umbralDocumento       Float     @default(700)
+  umbralDocumento        Float     @default(700)
   /// Pases de invitado gratuitos que puede dar cada socio por mes.
-  invitadosPorMes       Int       @default(1)
+  invitadosPorMes        Int       @default(1)
   /// Numero y titular de Yape para las renovaciones desde el portal.
-  yapeNumero            String    @default("")
-  yapeTitular           String    @default("")
+  yapeNumero             String    @default("")
+  yapeTitular            String    @default("")
   /// Aforo maximo del local. 0 = no mostrar porcentaje en la landing.
-  aforoMaximo           Int       @default(0)
-  mostrarAforo          Boolean   @default(true)
+  aforoMaximo            Int       @default(0)
+  mostrarAforo           Boolean   @default(true)
   /// Mensajes de WhatsApp tras cobrar. Vacio = el texto por defecto del sistema.
-  mensajeCobroNuevo      String @default("")
-  mensajeCobroRenovacion String @default("")
-  ultimoRespaldoAt      DateTime?
-  ultimoRespaldoArchivo String    @default("")
+  mensajeCobroNuevo      String    @default("")
+  mensajeCobroRenovacion String    @default("")
+  ultimoRespaldoAt       DateTime?
+  ultimoRespaldoArchivo  String    @default("")
   /// ninguno | nubefact
-  pseProveedor          String    @default("ninguno")
-  pseRuc                String    @default("")
-  pseToken              String    @default("")
-  pseUrl                String    @default("")
+  pseProveedor           String    @default("ninguno")
+  pseRuc                 String    @default("")
+  pseToken               String    @default("")
+  pseUrl                 String    @default("")
   /// Textos legales versionados: se guarda que version acepto cada socio.
-  terminosVersion       String    @default("1.0")
-  terminosTexto         String    @default("")
-  privacidadVersion     String    @default("1.0")
-  privacidadTexto       String    @default("")
-  consentimientoVersion String    @default("1.0")
-  consentimientoTexto   String    @default("")
-  actualizadoAt         DateTime  @updatedAt
+  terminosVersion        String    @default("1.0")
+  terminosTexto          String    @default("")
+  privacidadVersion      String    @default("1.0")
+  privacidadTexto        String    @default("")
+  consentimientoVersion  String    @default("1.0")
+  consentimientoTexto    String    @default("")
+  actualizadoAt          DateTime  @updatedAt
 }
 
 /// Numeracion correlativa por tipo de comprobante. Se incrementa dentro de una
@@ -526,14 +528,39 @@ model GuestPass {
 
 /// Catalogo de ejercicios. Se siembra con los habituales y el socio puede
 /// agregar los suyos.
+/// Catalogo de ejercicios. memberId null = catalogo del gimnasio, visible para
+/// todos. Con memberId es un ejercicio que el socio creo para si: solo el lo ve.
+/// El nombre es unico por dueno (lo controla TrainingService, no la base).
 model Exercise {
-  id     String  @id @default(cuid())
-  nombre String  @unique
-  grupo  String  @default("general")
-  activo Boolean @default(true)
+  id        String   @id @default(cuid())
+  nombre    String
+  grupo     String   @default("general")
+  activo    Boolean  @default(true)
+  memberId  String?
+  createdAt DateTime @default(now())
 
+  member  Member?           @relation(fields: [memberId], references: [id], onDelete: Cascade)
   series  WorkoutSet[]
   rutinas RoutineExercise[]
+
+  @@index([nombre])
+  @@index([memberId])
+}
+
+/// El plan semanal que el socio arma para si: que zonas toca cada dia.
+/// Distinto de la rutina del entrenador (RoutineAssignment), que es opt-in.
+model WeekPlan {
+  id        String @id @default(cuid())
+  memberId  String
+  /// 1 = lunes ... 7 = domingo
+  diaSemana Int
+  titulo    String @default("")
+  /// Zonas separadas por coma; vacio = descanso
+  grupos    String @default("")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, diaSemana])
 }
 
 /// Una serie registrada: que ejercicio, cuantas repeticiones y con cuanto peso.

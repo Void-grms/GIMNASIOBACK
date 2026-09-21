@@ -292,9 +292,42 @@ async function main() {
     ['Cinta (minutos)', 'cardio'],
     ['Bicicleta estatica (minutos)', 'cardio'],
     ['Eliptica (minutos)', 'cardio'],
+    // Segunda tanda: los que mas se echaban de menos en el catalogo.
+    ['Press declinado', 'pecho'],
+    ['Peck deck', 'pecho'],
+    ['Cruce en polea', 'pecho'],
+    ['Press de pecho en maquina', 'pecho'],
+    ['Remo con mancuerna', 'espalda'],
+    ['Remo en maquina', 'espalda'],
+    ['Dominadas asistidas', 'espalda'],
+    ['Pullover en polea', 'espalda'],
+    ['Face pull', 'hombro'],
+    ['Press Arnold', 'hombro'],
+    ['Elevaciones frontales', 'hombro'],
+    ['Remo al menton', 'hombro'],
+    ['Curl concentrado', 'brazo'],
+    ['Curl en banco Scott', 'brazo'],
+    ['Curl en polea', 'brazo'],
+    ['Patada de triceps', 'brazo'],
+    ['Press cerrado', 'brazo'],
+    ['Fondos entre bancos', 'brazo'],
+    ['Zancadas', 'pierna'],
+    ['Sentadilla hack', 'pierna'],
+    ['Sentadilla goblet', 'pierna'],
+    ['Peso muerto rumano', 'pierna'],
+    ['Aductores en maquina', 'pierna'],
+    ['Puente de gluteo', 'gluteo'],
+    ['Peso muerto sumo', 'gluteo'],
+    ['Hiperextensiones', 'espalda'],
+    ['Elevacion de piernas colgado', 'core'],
+    ['Crunch en polea', 'core'],
+    ['Giros rusos', 'core'],
+    ['Saltar soga (minutos)', 'cardio'],
+    ['Remo ergometro (minutos)', 'cardio'],
+    ['Escaladora (minutos)', 'cardio'],
   ];
   for (const [nombre, grupo] of ejercicios) {
-    const existe = await prisma.exercise.findUnique({ where: { nombre } });
+    const existe = await prisma.exercise.findFirst({ where: { nombre, memberId: null } });
     if (!existe) await prisma.exercise.create({ data: { nombre, grupo } });
   }
 
@@ -313,7 +346,7 @@ async function main() {
   // Rutina guiada de ejemplo para quien recien empieza.
   if ((await prisma.routine.count()) === 0) {
     const id = async (nombre: string) =>
-      (await prisma.exercise.findUnique({ where: { nombre } }))!.id;
+      (await prisma.exercise.findFirst({ where: { nombre, memberId: null } }))!.id;
     const dia = async (
       diaSemana: number,
       titulo: string,
