@@ -297,6 +297,8 @@ model Notification {
   canal     String   @default("whatsapp")
   mensaje   String
   enviadoAt DateTime @default(now())
+  /// Solo para tipo "cobro": el pago cuyo comprobante se envio.
+  paymentId String?
 
   member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
@@ -327,6 +329,9 @@ model Settings {
   /// Aforo maximo del local. 0 = no mostrar porcentaje en la landing.
   aforoMaximo           Int       @default(0)
   mostrarAforo          Boolean   @default(true)
+  /// Mensajes de WhatsApp tras cobrar. Vacio = el texto por defecto del sistema.
+  mensajeCobroNuevo      String @default("")
+  mensajeCobroRenovacion String @default("")
   ultimoRespaldoAt      DateTime?
   ultimoRespaldoArchivo String    @default("")
   /// ninguno | nubefact

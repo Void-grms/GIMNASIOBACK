@@ -188,6 +188,7 @@ export class RenewalsService {
       ok: true,
       inicio: membresia.inicio,
       vence: membresia.vence,
+      paymentId: membresia.paymentId,
       errorComprobante: membresia.errorComprobante,
     };
   }

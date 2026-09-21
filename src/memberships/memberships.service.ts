@@ -141,6 +141,7 @@ export class MembershipsService {
       inicio: formatoFecha(membresia.fechaInicio),
       vence: formatoFecha(membresia.fechaFin),
       arrancaDespues: !esPaseDiario && fechaInicio.getTime() > hoyLima().getTime(),
+      paymentId: membresia.payments[0]?.id ?? null,
       comprobante,
       errorComprobante,
     };

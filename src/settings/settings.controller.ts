@@ -32,6 +32,8 @@ class AjustesDto {
   @IsOptional() @IsInt() @Min(0) @Max(2000) aforoMaximo?: number;
   @IsOptional() @IsBoolean() mostrarAforo?: boolean;
   @IsOptional() @IsInt() @Min(0) @Max(20) invitadosPorMes?: number;
+  @IsOptional() @IsString() @MaxLength(1000) mensajeCobroNuevo?: string;
+  @IsOptional() @IsString() @MaxLength(1000) mensajeCobroRenovacion?: string;
 }
 
 @Controller('settings')

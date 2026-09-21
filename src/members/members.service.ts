@@ -159,7 +159,10 @@ export class MembersService {
     const socio = await this.prisma.member.findUnique({
       where: { id },
       include: {
-        memberships: { orderBy: { fechaInicio: 'desc' }, include: { plan: true } },
+        memberships: {
+          orderBy: { fechaInicio: 'desc' },
+          include: { plan: true, payments: { select: { id: true } } },
+        },
         payments: { orderBy: { fecha: 'desc' }, take: 20 },
         checkIns: { orderBy: { timestamp: 'desc' }, take: 20 },
       },

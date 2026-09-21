@@ -20,6 +20,7 @@ import { SystemModule } from './system/system.module';
 import { GuestsModule } from './guests/guests.module';
 import { TrainingModule } from './training/training.module';
 import { RenewalsModule } from './renewals/renewals.module';
+import { MessagesModule } from './messages/messages.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { RenewalsModule } from './renewals/renewals.module';
     GuestsModule,
     TrainingModule,
     RenewalsModule,
+    MessagesModule,
   ],
 })
 export class AppModule {}

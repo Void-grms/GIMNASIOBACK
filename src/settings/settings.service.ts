@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MENSAJE_NUEVO, MENSAJE_RENOVACION } from '../messages/plantillas';
 
 /** Regimenes que si trasladan IGV. El NRUS paga cuota fija y no lo desglosa. */
 const REGIMENES_CON_IGV = ['rer', 'rmt', 'general'];
@@ -26,6 +27,7 @@ export class SettingsService {
       'privacidadVersion', 'privacidadTexto',
       'consentimientoVersion', 'consentimientoTexto',
       'yapeNumero', 'yapeTitular', 'aforoMaximo', 'mostrarAforo',
+      'mensajeCobroNuevo', 'mensajeCobroRenovacion',
     ];
     const data: Record<string, any> = {};
     for (const campo of campos) if (dto[campo] !== undefined) data[campo] = dto[campo];
@@ -61,6 +63,9 @@ export class SettingsService {
       yapeTitular: s.yapeTitular,
       aforoMaximo: s.aforoMaximo,
       mostrarAforo: s.mostrarAforo,
+      // Vacio en la base = texto por defecto; Ajustes lo muestra para editarlo.
+      mensajeCobroNuevo: s.mensajeCobroNuevo || MENSAJE_NUEVO,
+      mensajeCobroRenovacion: s.mensajeCobroRenovacion || MENSAJE_RENOVACION,
     };
   }
 
