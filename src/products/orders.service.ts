@@ -55,6 +55,8 @@ export class OrdersService {
       nombre: p.nombre,
       precio: p.precio,
       esServicio: p.esServicio,
+      esCasillero: p.esCasillero,
+      fotoUrl: p.fotoUrl,
       disponible: p.esServicio ? null : Math.max(0, p.stock - (apartado.get(p.id) || 0)),
     }));
   }
@@ -90,6 +92,9 @@ export class OrdersService {
         const producto = await tx.product.findUnique({ where: { id: productId } });
         if (!producto || !producto.activo) {
           throw new BadRequestException('Uno de los productos ya no esta disponible');
+        }
+        if (producto.esCasillero && cantidad > 1) {
+          throw new BadRequestException('Se alquila un casillero por socio');
         }
         if (!producto.esServicio) {
           const libre = producto.stock - (apartado.get(productId) || 0);
@@ -156,7 +161,7 @@ export class OrdersService {
    * cambio de estado condicional: si dos recepcionistas pulsan a la vez, solo
    * uno lo cobra.
    */
-  async entregar(id: string, metodo: string, cajeroId: string) {
+  async entregar(id: string, metodo: string, cajeroId: string, casilleroNumero?: number) {
     const tomado = await this.prisma.order.updateMany({
       where: { id, estado: 'pendiente' },
       data: { estado: 'cobrando' },
@@ -174,6 +179,7 @@ export class OrdersService {
         memberId: pedido.memberId,
         nota: `Pedido del portal #${this.codigo(pedido.id)}`,
         cajeroId,
+        casilleroNumero,
       });
     } catch (e) {
       await this.prisma.order.update({ where: { id }, data: { estado: 'pendiente' } });
@@ -184,7 +190,7 @@ export class OrdersService {
       where: { id },
       data: { estado: 'entregado', saleId: venta.id, atendidoPor: cajeroId, atendidoAt: new Date() },
     });
-    return { ok: true, total: venta.total, comprobante: venta.comprobante, errorComprobante: venta.errorComprobante };
+    return { ok: true, total: venta.total, casillero: venta.casillero, comprobante: venta.comprobante, errorComprobante: venta.errorComprobante };
   }
 
   async cancelarEnRecepcion(id: string, cajeroId: string) {
@@ -218,6 +224,7 @@ export class OrdersService {
       items: p.items.map((i: any) => ({
         productId: i.productId,
         producto: i.product?.nombre,
+        esCasillero: !!i.product?.esCasillero,
         cantidad: i.cantidad,
         precioUnitario: i.precioUnitario,
       })),

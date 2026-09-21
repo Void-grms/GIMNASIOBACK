@@ -25,6 +25,7 @@ export class SettingsService {
       'terminosVersion', 'terminosTexto',
       'privacidadVersion', 'privacidadTexto',
       'consentimientoVersion', 'consentimientoTexto',
+      'yapeNumero', 'yapeTitular', 'aforoMaximo', 'mostrarAforo',
     ];
     const data: Record<string, any> = {};
     for (const campo of campos) if (dto[campo] !== undefined) data[campo] = dto[campo];
@@ -56,6 +57,10 @@ export class SettingsService {
       privacidadTexto: s.privacidadTexto,
       consentimientoVersion: s.consentimientoVersion,
       consentimientoTexto: s.consentimientoTexto,
+      yapeNumero: s.yapeNumero,
+      yapeTitular: s.yapeTitular,
+      aforoMaximo: s.aforoMaximo,
+      mostrarAforo: s.mostrarAforo,
     };
   }
 

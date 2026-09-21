@@ -86,10 +86,13 @@ export class PortalService {
 
     const membresia = await this.members.membresiaVigente(memberId);
     const dentro = await this.members.estaDentro(memberId);
+    const casillero = await this.prisma.locker.findUnique({ where: { memberId } });
     return {
       ...this.members.resumen(socio, membresia, dentro),
       email: socio.email,
       debeCambiarPin: !socio.pinCambiado,
+      ocultarEnRanking: socio.ocultarEnRanking,
+      casillero: casillero?.numero ?? null,
       racha: this.racha(socio.checkIns.map((c) => c.timestamp)),
       asistenciasMes: socio.checkIns.filter(
         (c) => c.timestamp.getTime() > Date.now() - 30 * 24 * 3600 * 1000,
@@ -133,7 +136,13 @@ export class PortalService {
    */
   async actualizarPerfil(
     memberId: string,
-    dto: { telefono?: string; email?: string; pinActual?: string; pinNuevo?: string },
+    dto: {
+      telefono?: string;
+      email?: string;
+      pinActual?: string;
+      pinNuevo?: string;
+      ocultarEnRanking?: boolean;
+    },
   ) {
     const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
     if (!socio) throw new NotFoundException('Socio no encontrado');
@@ -141,6 +150,7 @@ export class PortalService {
     const data: Record<string, any> = {};
     if (dto.telefono !== undefined) data.telefono = dto.telefono.trim() || null;
     if (dto.email !== undefined) data.email = dto.email.trim().toLowerCase() || null;
+    if (dto.ocultarEnRanking !== undefined) data.ocultarEnRanking = dto.ocultarEnRanking;
 
     if (dto.pinNuevo) {
       const nuevo = dto.pinNuevo.replace(/\D/g, '');

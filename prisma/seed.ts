@@ -298,6 +298,72 @@ async function main() {
     if (!existe) await prisma.exercise.create({ data: { nombre, grupo } });
   }
 
+  // Casilleros: 20 para empezar; el total se cambia desde Productos.
+  if ((await prisma.locker.count()) === 0) {
+    await prisma.locker.createMany({ data: Array.from({ length: 20 }, (_, i) => ({ numero: i + 1 })) });
+  }
+  // El alquiler de casillero es el producto que asigna numero al cobrarse.
+  if ((await prisma.product.count({ where: { esCasillero: true } })) === 0) {
+    await prisma.product.updateMany({
+      where: { nombre: 'Alquiler de casillero' },
+      data: { esCasillero: true },
+    });
+  }
+
+  // Rutina guiada de ejemplo para quien recien empieza.
+  if ((await prisma.routine.count()) === 0) {
+    const id = async (nombre: string) =>
+      (await prisma.exercise.findUnique({ where: { nombre } }))!.id;
+    const dia = async (
+      diaSemana: number,
+      titulo: string,
+      grupos: string[],
+      lista: [string, number, string][],
+    ) => ({
+      diaSemana,
+      titulo,
+      grupos: grupos.join(','),
+      ejercicios: {
+        create: await Promise.all(
+          lista.map(async ([nombre, series, repeticiones], orden) => ({
+            exerciseId: await id(nombre),
+            series,
+            repeticiones,
+            orden,
+          })),
+        ),
+      },
+    });
+    await prisma.routine.create({
+      data: {
+        nombre: 'Inicio 3 dias',
+        descripcion: 'Para las primeras semanas: tres dias, maquinas y peso moderado.',
+        dias: {
+          create: [
+            await dia(1, 'Pecho y triceps', ['pecho', 'brazo'], [
+              ['Press de banca', 3, '10-12'],
+              ['Press inclinado con mancuernas', 3, '10-12'],
+              ['Aperturas en polea', 3, '12'],
+              ['Extension de triceps en polea', 3, '12'],
+            ]),
+            await dia(3, 'Espalda y biceps', ['espalda', 'brazo'], [
+              ['Jalon al pecho', 3, '10-12'],
+              ['Remo en polea baja', 3, '10-12'],
+              ['Curl de biceps con barra', 3, '12'],
+              ['Curl martillo', 3, '12'],
+            ]),
+            await dia(5, 'Piernas y gluteos', ['pierna', 'gluteo'], [
+              ['Prensa de piernas', 3, '12'],
+              ['Hip thrust', 3, '12'],
+              ['Curl femoral', 3, '12'],
+              ['Elevacion de pantorrillas', 3, '15'],
+            ]),
+          ],
+        },
+      },
+    });
+  }
+
   console.log('Listo.');
   if (!PRODUCCION) {
     console.log('  Staff:  admin@gimnasio.pe / admin123');

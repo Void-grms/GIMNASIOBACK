@@ -4,7 +4,7 @@ import {
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsInt, IsNumber, IsOptional, IsString, Length, Max,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Length, Max,
   MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { PortalService } from './portal.service';
@@ -24,6 +24,7 @@ class PerfilDto {
   @IsOptional() @IsString() email?: string;
   @IsOptional() @IsString() @Length(4, 4) pinActual?: string;
   @IsOptional() @IsString() @Length(4, 4) pinNuevo?: string;
+  @IsOptional() @IsBoolean() ocultarEnRanking?: boolean;
 }
 
 class SerieDto {

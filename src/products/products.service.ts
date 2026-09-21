@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { diaLimaDe, fechaDesdeTexto, hoyLima, rangoEntre } from '../common/fechas';
+import { carpetaArchivos, guardarImagen } from '../common/archivos';
+import { join } from 'path';
 
 type DatosComprobante = {
   tipo: string;
@@ -39,6 +41,21 @@ export class ProductsService {
     return this.prisma.product.update({ where: { id }, data: dto });
   }
 
+  /** Foto del producto para la tienda del portal. Es publica, como las de socios. */
+  async guardarFoto(id: string, imagen: string) {
+    const producto = await this.prisma.product.findUnique({ where: { id } });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    const ext = guardarImagen(imagen, join(carpetaArchivos(), 'productos'), id, 1.5 * 1024 * 1024);
+    return this.prisma.product.update({
+      where: { id },
+      data: { fotoUrl: `/uploads/productos/${id}.${ext}?v=${Date.now()}` },
+    });
+  }
+
+  async quitarFoto(id: string) {
+    return this.prisma.product.update({ where: { id }, data: { fotoUrl: null } });
+  }
+
   /** Ajuste manual de inventario: reposicion, merma o correccion de conteo. */
   async ajustarStock(id: string, cantidad: number) {
     const producto = await this.prisma.product.findUnique({ where: { id } });
@@ -60,6 +77,8 @@ export class ProductsService {
     memberId?: string;
     nota?: string;
     cajeroId?: string;
+    /** Obligatorio cuando se cobra el alquiler de casillero. */
+    casilleroNumero?: number;
     comprobante?: {
       tipo: string;
       clienteTipoDoc: string;
@@ -72,6 +91,7 @@ export class ProductsService {
 
     const venta = await this.prisma.$transaction(async (tx) => {
       let total = 0;
+      let casilleros = 0;
       const lineas: { productId: string; cantidad: number; precioUnitario: number }[] = [];
 
       for (const item of dto.items) {
@@ -85,12 +105,37 @@ export class ProductsService {
             `Solo quedan ${producto.stock} de "${producto.nombre}"`,
           );
         }
+        if (producto.esCasillero) casilleros += item.cantidad;
         total += producto.precio * item.cantidad;
         lineas.push({
           productId: producto.id,
           cantidad: item.cantidad,
           precioUnitario: producto.precio,
         });
+      }
+
+      // El casillero se entrega con numero: queda a nombre del socio hasta que
+      // marque su salida. Se ocupa con un cambio condicional para que dos
+      // cobros simultaneos no entreguen la misma llave.
+      let casillero: number | null = null;
+      if (casilleros > 0) {
+        if (casilleros > 1) throw new BadRequestException('Se alquila un casillero por socio');
+        if (!dto.memberId) {
+          throw new BadRequestException('El casillero se alquila a un socio: indica su DNI');
+        }
+        if (!dto.casilleroNumero) throw new BadRequestException('Elige el numero de casillero');
+        const yaTiene = await tx.locker.findUnique({ where: { memberId: dto.memberId } });
+        if (yaTiene) {
+          throw new BadRequestException(`Este socio ya tiene el casillero ${yaTiene.numero}`);
+        }
+        const tomado = await tx.locker.updateMany({
+          where: { numero: dto.casilleroNumero, activo: true, memberId: null },
+          data: { memberId: dto.memberId, ocupadoDesde: new Date() },
+        });
+        if (tomado.count === 0) {
+          throw new BadRequestException(`El casillero ${dto.casilleroNumero} esta ocupado o no existe`);
+        }
+        casillero = dto.casilleroNumero;
       }
 
       const venta = await tx.sale.create({
@@ -126,7 +171,7 @@ export class ProductsService {
         },
       });
 
-      return { ...venta, paymentId: pago.id };
+      return { ...venta, paymentId: pago.id, casillero };
     });
 
     // El comprobante va fuera de la transaccion: el stock y el pago ya quedaron

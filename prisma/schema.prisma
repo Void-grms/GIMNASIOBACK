@@ -13,15 +13,15 @@ datasource db {
 
 /// Personal del gimnasio (admin / recepcion). Los socios NO viven aqui.
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  nombre       String
-  rol          String   @default("recepcion") // admin | recepcion
-  activo       Boolean  @default(true)
-  intentosFallidos Int  @default(0)
-  bloqueadoHasta DateTime?
-  createdAt    DateTime @default(now())
+  id               String    @id @default(cuid())
+  email            String    @unique
+  passwordHash     String
+  nombre           String
+  rol              String    @default("recepcion") // admin | recepcion
+  activo           Boolean   @default(true)
+  intentosFallidos Int       @default(0)
+  bloqueadoHasta   DateTime?
+  createdAt        DateTime  @default(now())
 
   pagosCobrados Payment[]
   ventas        Sale[]
@@ -30,39 +30,44 @@ model User {
 
 /// Socio del gimnasio.
 model Member {
-  id              String   @id @default(cuid())
-  dni             String   @unique
-  nombres         String
-  apellidos       String
-  telefono        String?
-  email           String?
-  direccion       String?
-  fotoUrl         String?
-  esUniversitario Boolean  @default(false)
+  id               String    @id @default(cuid())
+  dni              String    @unique
+  nombres          String
+  apellidos        String
+  telefono         String?
+  email            String?
+  direccion        String?
+  fotoUrl          String?
+  esUniversitario  Boolean   @default(false)
   /// PIN de 4 digitos para entrar al portal. Se genera al azar en el alta.
-  pinHash         String
+  pinHash          String
   /// Mientras sea false, el portal obliga a cambiarlo antes de seguir.
-  pinCambiado     Boolean  @default(false)
-  intentosFallidos Int     @default(0)
-  bloqueadoHasta  DateTime?
-  notas           String?
-  activo          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  pinCambiado      Boolean   @default(false)
+  intentosFallidos Int       @default(0)
+  bloqueadoHasta   DateTime?
+  notas            String?
+  activo           Boolean   @default(true)
+  /// El socio puede pedir no aparecer con su nombre en el ranking del mes.
+  ocultarEnRanking Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  memberships  Membership[]
-  checkIns     CheckIn[]
-  payments     Payment[]
-  credential   Credential?
-  preCheckIns  PreCheckIn[]
-  ventas       Sale[]
-  avisos       Notification[]
-  consents     Consent[]
-  complaints   Complaint[]
-  invitados    GuestPass[]
+  memberships    Membership[]
+  checkIns       CheckIn[]
+  payments       Payment[]
+  credential     Credential?
+  preCheckIns    PreCheckIn[]
+  ventas         Sale[]
+  avisos         Notification[]
+  consents       Consent[]
+  complaints     Complaint[]
+  invitados      GuestPass[]
   entrenamientos WorkoutSet[]
-  medidas      BodyLog[]
-  pedidos      Order[]
+  medidas        BodyLog[]
+  pedidos        Order[]
+  rutinas        RoutineAssignment[]
+  renovaciones   RenewalRequest[]
+  casillero      Locker?
 
   @@index([apellidos, nombres])
 }
@@ -80,22 +85,23 @@ model Plan {
   orden             Int      @default(0)
   createdAt         DateTime @default(now())
 
-  memberships Membership[]
+  memberships  Membership[]
+  renovaciones RenewalRequest[]
 }
 
 /// Una membresia comprada por un socio. El pase diario es una membresia de 1 dia.
 model Membership {
-  id            String   @id @default(cuid())
-  memberId      String
-  planId        String
+  id           String   @id @default(cuid())
+  memberId     String
+  planId       String
   /// Fecha de inicio, normalizada a las 00:00 hora de Lima
-  fechaInicio   DateTime
+  fechaInicio  DateTime
   /// Ultimo dia valido inclusive: inicio + (duracionDias - 1)
-  fechaFin      DateTime
-  precioPagado  Float
-  estado        String   @default("activa") // activa | anulada
-  observacion   String?
-  createdAt     DateTime @default(now())
+  fechaFin     DateTime
+  precioPagado Float
+  estado       String   @default("activa") // activa | anulada
+  observacion  String?
+  createdAt    DateTime @default(now())
 
   member   Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
   plan     Plan      @relation(fields: [planId], references: [id])
@@ -114,7 +120,7 @@ model Payment {
   /// membresia | producto
   concepto      String   @default("membresia")
   monto         Float
-  metodo        String   // efectivo | yape | plin | tarjeta | transferencia
+  metodo        String // efectivo | yape | plin | tarjeta | transferencia
   fecha         DateTime @default(now())
   cajeroId      String?
   comprobanteId String?
@@ -137,9 +143,9 @@ model CheckIn {
   timestamp    DateTime @default(now())
   /// entrada | salida. El escaneo alterna solo segun donde este el socio.
   tipo         String   @default("entrada")
-  metodo       String   // qr | manual | prechequeo | huella | auto
+  metodo       String // qr | manual | prechequeo | huella | auto
   dispositivo  String?
-  resultado    String   // permitido | denegado
+  resultado    String // permitido | denegado
   motivo       String?
 
   member     Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
@@ -165,13 +171,13 @@ model Credential {
 /// Es un atajo para recepcion, NO una autorizacion: el ingreso se registra
 /// recien cuando recepcion confirma.
 model PreCheckIn {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   memberId    String
   /// entrada | salida
-  tipo        String   @default("entrada")
-  createdAt   DateTime @default(now())
+  tipo        String    @default("entrada")
+  createdAt   DateTime  @default(now())
   expiresAt   DateTime
-  estado      String   @default("pendiente") // pendiente | confirmado | expirado | descartado
+  estado      String    @default("pendiente") // pendiente | confirmado | expirado | descartado
   confirmedAt DateTime?
   checkInId   String?
 
@@ -189,6 +195,9 @@ model Product {
   stockMinimo Int      @default(3)
   /// true para servicios sin inventario (alquiler de casillero, por ejemplo)
   esServicio  Boolean  @default(false)
+  /// true para el alquiler de casillero: al cobrarlo se asigna un numero.
+  esCasillero Boolean  @default(false)
+  fotoUrl     String?
   activo      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
@@ -201,18 +210,18 @@ model Product {
 /// convierte en una venta normal (saleId). Mientras esta pendiente, sus
 /// cantidades se descuentan del disponible que ven los demas socios.
 model Order {
-  id          String    @id @default(cuid())
-  memberId    String
+  id           String    @id @default(cuid())
+  memberId     String
   /// pendiente | entregado | cancelado | vencido
-  estado      String    @default("pendiente")
-  total       Float
-  nota        String?
-  saleId      String?   @unique
+  estado       String    @default("pendiente")
+  total        Float
+  nota         String?
+  saleId       String?   @unique
   /// socio | recepcion | sistema
   canceladoPor String?
-  atendidoPor String?
-  atendidoAt  DateTime?
-  createdAt   DateTime  @default(now())
+  atendidoPor  String?
+  atendidoAt   DateTime?
+  createdAt    DateTime  @default(now())
 
   member Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
   items  OrderItem[]
@@ -243,19 +252,19 @@ model Sale {
   nota     String?
 
   items   SaleItem[]
-  member  Member?  @relation(fields: [memberId], references: [id])
-  cajero  User?    @relation(fields: [cajeroId], references: [id])
+  member  Member?    @relation(fields: [memberId], references: [id])
+  cajero  User?      @relation(fields: [cajeroId], references: [id])
   payment Payment?
 
   @@index([fecha])
 }
 
 model SaleItem {
-  id              String @id @default(cuid())
-  saleId          String
-  productId       String
-  cantidad        Int
-  precioUnitario  Float
+  id             String @id @default(cuid())
+  saleId         String
+  productId      String
+  cantidad       Int
+  precioUnitario Float
 
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
@@ -298,45 +307,51 @@ model Notification {
 /// El regimen decide si hay IGV y si se puede emitir factura, asi que cambiar
 /// de NRUS a RER no toca ni una linea de codigo.
 model Settings {
-  id               String   @id @default("default")
-  razonSocial      String   @default("Mi gimnasio")
-  nombreComercial  String   @default("Mi gimnasio")
-  ruc              String   @default("")
-  direccionFiscal  String   @default("")
-  telefono         String   @default("")
-  email            String   @default("")
+  id                    String    @id @default("default")
+  razonSocial           String    @default("Mi gimnasio")
+  nombreComercial       String    @default("Mi gimnasio")
+  ruc                   String    @default("")
+  direccionFiscal       String    @default("")
+  telefono              String    @default("")
+  email                 String    @default("")
   /// nrus | rer | rmt | general
-  regimen          String   @default("nrus")
-  igvTasa          Float    @default(0.18)
+  regimen               String    @default("nrus")
+  igvTasa               Float     @default(0.18)
   /// Cuando el importe de una boleta supera esto, SUNAT exige identificar al cliente.
-  umbralDocumento  Float    @default(700)
+  umbralDocumento       Float     @default(700)
   /// Pases de invitado gratuitos que puede dar cada socio por mes.
-  invitadosPorMes  Int      @default(1)
-  ultimoRespaldoAt DateTime?
-  ultimoRespaldoArchivo String @default("")
+  invitadosPorMes       Int       @default(1)
+  /// Numero y titular de Yape para las renovaciones desde el portal.
+  yapeNumero            String    @default("")
+  yapeTitular           String    @default("")
+  /// Aforo maximo del local. 0 = no mostrar porcentaje en la landing.
+  aforoMaximo           Int       @default(0)
+  mostrarAforo          Boolean   @default(true)
+  ultimoRespaldoAt      DateTime?
+  ultimoRespaldoArchivo String    @default("")
   /// ninguno | nubefact
-  pseProveedor     String   @default("ninguno")
-  pseRuc           String   @default("")
-  pseToken         String   @default("")
-  pseUrl           String   @default("")
+  pseProveedor          String    @default("ninguno")
+  pseRuc                String    @default("")
+  pseToken              String    @default("")
+  pseUrl                String    @default("")
   /// Textos legales versionados: se guarda que version acepto cada socio.
-  terminosVersion  String   @default("1.0")
-  terminosTexto    String   @default("")
-  privacidadVersion String  @default("1.0")
-  privacidadTexto  String   @default("")
-  consentimientoVersion String @default("1.0")
-  consentimientoTexto   String @default("")
-  actualizadoAt    DateTime @updatedAt
+  terminosVersion       String    @default("1.0")
+  terminosTexto         String    @default("")
+  privacidadVersion     String    @default("1.0")
+  privacidadTexto       String    @default("")
+  consentimientoVersion String    @default("1.0")
+  consentimientoTexto   String    @default("")
+  actualizadoAt         DateTime  @updatedAt
 }
 
 /// Numeracion correlativa por tipo de comprobante. Se incrementa dentro de una
 /// transaccion para que dos cobros simultaneos no compartan numero.
 model Serie {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   /// boleta | factura | recibo
   tipo        String
   serie       String
-  correlativo Int    @default(0)
+  correlativo Int     @default(0)
   activa      Boolean @default(true)
 
   @@unique([tipo, serie])
@@ -345,19 +360,19 @@ model Serie {
 /// Comprobante de pago emitido. Guarda los campos que exige SUNAT aunque el
 /// envio electronico todavia no este conectado.
 model Receipt {
-  id               String   @id @default(cuid())
+  id          String @id @default(cuid())
   /// boleta | factura | recibo
-  tipo             String
+  tipo        String
   /// 03 boleta, 01 factura, vacio para el recibo interno
-  codigoSunat      String   @default("")
-  serie            String
-  numero           Int
+  codigoSunat String @default("")
+  serie       String
+  numero      Int
 
   /// Emisor congelado al momento de emitir: si manana cambia la razon social,
   /// el comprobante viejo debe seguir diciendo lo que decia.
-  emisorRuc        String
-  emisorRazon      String
-  emisorDireccion  String
+  emisorRuc       String
+  emisorRazon     String
+  emisorDireccion String
 
   /// dni | ruc | ce | pasaporte | sin_documento
   clienteTipoDoc   String
@@ -365,31 +380,31 @@ model Receipt {
   clienteNombre    String
   clienteDireccion String?
 
-  moneda           String   @default("PEN")
+  moneda   String @default("PEN")
   /// Valor de venta sin IGV
-  gravado          Float
-  igv              Float
+  gravado  Float
+  igv      Float
   /// Operaciones sin IGV (NRUS y exonerados)
-  inafecto         Float    @default(0)
-  total            Float
-  igvTasa          Float    @default(0)
+  inafecto Float  @default(0)
+  total    Float
+  igvTasa  Float  @default(0)
 
   /// no_aplica | pendiente | enviado | aceptado | rechazado
-  estadoSunat      String   @default("no_aplica")
-  sunatMensaje     String?
-  sunatHash        String?
-  sunatEnlace      String?
+  estadoSunat  String  @default("no_aplica")
+  sunatMensaje String?
+  sunatHash    String?
+  sunatEnlace  String?
 
-  anulado          Boolean  @default(false)
-  motivoAnulacion  String?
-  anuladoAt        DateTime?
+  anulado         Boolean   @default(false)
+  motivoAnulacion String?
+  anuladoAt       DateTime?
 
-  observacion      String?
-  emitidoAt        DateTime @default(now())
+  observacion String?
+  emitidoAt   DateTime @default(now())
 
-  paymentId        String?  @unique
-  payment          Payment? @relation(fields: [paymentId], references: [id])
-  items            ReceiptItem[]
+  paymentId String?       @unique
+  payment   Payment?      @relation(fields: [paymentId], references: [id])
+  items     ReceiptItem[]
 
   @@unique([tipo, serie, numero])
   @@index([emitidoAt])
@@ -413,40 +428,40 @@ model ReceiptItem {
 /// Libro de reclamaciones virtual (Codigo del Consumidor, Ley 29571).
 /// Los campos siguen el formato del anexo del reglamento.
 model Complaint {
-  id             String   @id @default(cuid())
-  codigo         String   @unique
+  id     String @id @default(cuid())
+  codigo String @unique
 
   /// reclamo (disconformidad con el servicio) | queja (malestar con la atencion)
-  tipo           String
+  tipo String
 
-  nombre         String
-  tipoDoc        String
-  numDoc         String
-  telefono       String?
-  email          String
-  direccion      String?
-  esMenorDeEdad  Boolean  @default(false)
-  apoderado      String?
+  nombre        String
+  tipoDoc       String
+  numDoc        String
+  telefono      String?
+  email         String
+  direccion     String?
+  esMenorDeEdad Boolean @default(false)
+  apoderado     String?
 
   /// producto | servicio
-  bienTipo       String
+  bienTipo        String
   bienDescripcion String
-  montoReclamado Float?
+  montoReclamado  Float?
 
-  detalle        String
-  pedido         String
+  detalle String
+  pedido  String
 
   /// pendiente | respondido
-  estado         String   @default("pendiente")
-  respuesta      String?
-  respondidoAt   DateTime?
-  respondidoPor  String?
+  estado        String    @default("pendiente")
+  respuesta     String?
+  respondidoAt  DateTime?
+  respondidoPor String?
   /// 15 dias habiles desde el registro
-  plazoLimite    DateTime
+  plazoLimite   DateTime
 
-  memberId       String?
-  member         Member?  @relation(fields: [memberId], references: [id])
-  createdAt      DateTime @default(now())
+  memberId  String?
+  member    Member?  @relation(fields: [memberId], references: [id])
+  createdAt DateTime @default(now())
 
   @@index([estado, plazoLimite])
 }
@@ -507,12 +522,13 @@ model GuestPass {
 /// Catalogo de ejercicios. Se siembra con los habituales y el socio puede
 /// agregar los suyos.
 model Exercise {
-  id      String  @id @default(cuid())
-  nombre  String  @unique
-  grupo   String  @default("general")
-  activo  Boolean @default(true)
+  id     String  @id @default(cuid())
+  nombre String  @unique
+  grupo  String  @default("general")
+  activo Boolean @default(true)
 
-  series WorkoutSet[]
+  series  WorkoutSet[]
+  rutinas RoutineExercise[]
 }
 
 /// Una serie registrada: que ejercicio, cuantas repeticiones y con cuanto peso.
@@ -553,4 +569,106 @@ model BodyLog {
 
   @@unique([memberId, fecha])
   @@index([memberId, fecha])
+}
+
+/// Plantilla de rutina que arma el entrenador ("Inicio 3 dias", por ejemplo).
+/// Es para quien la pide en sus primeras semanas: la mayoria entrena a su modo.
+model Routine {
+  id          String   @id @default(cuid())
+  nombre      String
+  descripcion String?
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  dias         RoutineDay[]
+  asignaciones RoutineAssignment[]
+}
+
+/// Un dia de la rutina: "Lunes: pecho y triceps".
+model RoutineDay {
+  id        String @id @default(cuid())
+  routineId String
+  /// 1 = lunes ... 7 = domingo
+  diaSemana Int
+  titulo    String
+  /// Zonas del dia separadas por coma (mismos valores que Exercise.grupo)
+  grupos    String @default("")
+
+  routine    Routine           @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  ejercicios RoutineExercise[]
+
+  @@unique([routineId, diaSemana])
+}
+
+model RoutineExercise {
+  id           String @id @default(cuid())
+  dayId        String
+  exerciseId   String
+  series       Int    @default(3)
+  /// Texto libre: "10", "8-12", "al fallo"
+  repeticiones String @default("10")
+  orden        Int    @default(0)
+
+  day      RoutineDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  exercise Exercise   @relation(fields: [exerciseId], references: [id])
+}
+
+/// Rutina asignada a un socio. Nace como "solicitada" cuando el socio la pide
+/// desde el portal; el entrenador la activa eligiendo una plantilla.
+model RoutineAssignment {
+  id          String    @id @default(cuid())
+  memberId    String
+  routineId   String?
+  /// solicitada | activa | terminada
+  estado      String    @default("solicitada")
+  nota        String?
+  hasta       DateTime?
+  asignadoPor String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  member  Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  routine Routine? @relation(fields: [routineId], references: [id])
+
+  @@index([memberId, estado])
+  @@index([estado])
+}
+
+/// Renovacion pedida desde el portal con pago por Yape. No crea la membresia:
+/// recepcion revisa la captura y recien al aprobar se cobra como una venta normal.
+model RenewalRequest {
+  id            String    @id @default(cuid())
+  memberId      String
+  planId        String
+  monto         Float
+  metodo        String    @default("yape")
+  /// Numero de operacion que muestra Yape (opcional, ayuda a conciliar)
+  operacion     String?
+  /// Ruta del archivo en la carpeta privada (no se sirve como estatico)
+  comprobante   String
+  /// pendiente | revisando | aprobada | rechazada
+  estado        String    @default("pendiente")
+  motivoRechazo String?
+  membershipId  String?
+  revisadoPor   String?
+  revisadoAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([estado, createdAt])
+  @@index([memberId, createdAt])
+}
+
+/// Casillero fisico. Se ocupa al cobrar el alquiler y se libera solo cuando el
+/// socio marca su salida (o cuando el sistema cierra su sesion olvidada).
+model Locker {
+  id           String    @id @default(cuid())
+  numero       Int       @unique
+  activo       Boolean   @default(true)
+  memberId     String?   @unique
+  ocupadoDesde DateTime?
+
+  member Member? @relation(fields: [memberId], references: [id], onDelete: SetNull)
 }

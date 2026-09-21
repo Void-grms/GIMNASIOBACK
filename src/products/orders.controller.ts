@@ -33,6 +33,8 @@ class EntregarDto {
     message: 'Metodo de pago invalido',
   })
   metodo: string;
+
+  @IsOptional() @IsInt() @Min(1) casilleroNumero?: number;
 }
 
 /** Lado del socio: la tienda del portal. */
@@ -82,7 +84,7 @@ export class OrdersController {
 
   @Post(':id/deliver')
   entregar(@Param('id') id: string, @Body() dto: EntregarDto, @SesionActual() sesion: Sesion) {
-    return this.orders.entregar(id, dto.metodo, sesion.sub);
+    return this.orders.entregar(id, dto.metodo, sesion.sub, dto.casilleroNumero);
   }
 
   @Post(':id/cancel')

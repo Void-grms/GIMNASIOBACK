@@ -13,6 +13,7 @@ export type ResultadoCheckIn = {
   motivo?: string;
   socio: any;
   checkInId: string | null;
+  casilleroLiberado?: number | null;
 };
 
 @Injectable()
@@ -171,6 +172,8 @@ export class CheckinsService {
     // encerrado por no haber pagado.
     if (tipo === 'salida') {
       const membresia = await this.members.membresiaVigente(socio.id);
+      const casillero = await this.liberarCasillero(socio.id);
+      const aviso = casillero ? `Casillero ${casillero} liberado: que devuelva la llave.` : undefined;
       const checkIn = await this.prisma.checkIn.create({
         data: {
           memberId: socio.id,
@@ -179,11 +182,14 @@ export class CheckinsService {
           metodo,
           dispositivo: dispositivo || null,
           resultado: 'permitido',
+          motivo: aviso ?? null,
         },
       });
       return {
         resultado: 'permitido',
         tipo: 'salida',
+        motivo: aviso,
+        casilleroLiberado: casillero,
         socio: this.members.resumen(socio, membresia, false),
         checkInId: checkIn.id,
       };
@@ -303,15 +309,37 @@ export class CheckinsService {
       where: { id: { in: dentro.map((d) => d.memberId) } },
     });
     const porId = new Map<string, any>(socios.map((s) => [s.id, s] as [string, any]));
+    const ocupados = await this.prisma.locker.findMany({
+      where: { memberId: { in: dentro.map((d) => d.memberId) } },
+    });
+    const casilleros = new Map(ocupados.map((c) => [c.memberId!, c.numero]));
 
     const salida = [];
     for (const d of dentro) {
       const socio = porId.get(d.memberId);
       if (!socio) continue;
       const membresia = await this.members.membresiaVigente(socio.id);
-      salida.push({ desde: d.desde, socio: this.members.resumen(socio, membresia, true) });
+      salida.push({
+        desde: d.desde,
+        casillero: casilleros.get(socio.id) ?? null,
+        socio: this.members.resumen(socio, membresia, true),
+      });
     }
     return salida.sort((a, b) => b.desde.getTime() - a.desde.getTime());
+  }
+
+  /**
+   * El casillero alquilado vuelve a quedar libre en cuanto el socio sale.
+   * Devuelve el numero liberado para avisarle a recepcion que pida la llave.
+   */
+  private async liberarCasillero(memberId: string): Promise<number | null> {
+    const casillero = await this.prisma.locker.findUnique({ where: { memberId } });
+    if (!casillero) return null;
+    await this.prisma.locker.update({
+      where: { id: casillero.id },
+      data: { memberId: null, ocupadoDesde: null },
+    });
+    return casillero.numero;
   }
 
   // ------------------------------------------------- cierre automatico diario
@@ -335,6 +363,10 @@ export class CheckinsService {
         resultado: 'permitido',
         motivo: 'Cierre automatico: no marco salida',
       })),
+    });
+    await this.prisma.locker.updateMany({
+      where: { memberId: { in: vencidas.map((d) => d.memberId) } },
+      data: { memberId: null, ocupadoDesde: null },
     });
     this.log.log(`Cerradas ${vencidas.length} sesion(es) sin salida`);
   }

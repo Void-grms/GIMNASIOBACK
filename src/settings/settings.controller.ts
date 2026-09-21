@@ -1,5 +1,5 @@
 import { Body, Controller, ForbiddenException, Get, Patch, UseGuards } from '@nestjs/common';
-import { IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { SettingsService } from './settings.service';
 import { SoloStaffGuard } from '../auth/solo-staff.guard';
 import { Publico } from '../auth/publico.decorator';
@@ -27,6 +27,11 @@ class AjustesDto {
   @IsOptional() @IsString() privacidadTexto?: string;
   @IsOptional() @IsString() consentimientoVersion?: string;
   @IsOptional() @IsString() consentimientoTexto?: string;
+  @IsOptional() @Matches(/^(\d{9})?$/, { message: 'El numero de Yape debe tener 9 digitos' }) yapeNumero?: string;
+  @IsOptional() @IsString() @MaxLength(80) yapeTitular?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(2000) aforoMaximo?: number;
+  @IsOptional() @IsBoolean() mostrarAforo?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Max(20) invitadosPorMes?: number;
 }
 
 @Controller('settings')
