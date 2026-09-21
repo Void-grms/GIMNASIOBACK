@@ -284,6 +284,14 @@ async function main() {
     ['Plancha', 'core'],
     ['Abdominales en banco', 'core'],
     ['Rueda abdominal', 'core'],
+    ['Hip thrust', 'gluteo'],
+    ['Patada de gluteo en polea', 'gluteo'],
+    ['Abduccion en maquina', 'gluteo'],
+    ['Sentadilla bulgara', 'gluteo'],
+    ['Encogimientos con mancuernas', 'espalda'],
+    ['Cinta (minutos)', 'cardio'],
+    ['Bicicleta estatica (minutos)', 'cardio'],
+    ['Eliptica (minutos)', 'cardio'],
   ];
   for (const [nombre, grupo] of ejercicios) {
     const existe = await prisma.exercise.findUnique({ where: { nombre } });

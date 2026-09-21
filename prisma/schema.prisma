@@ -62,6 +62,7 @@ model Member {
   invitados    GuestPass[]
   entrenamientos WorkoutSet[]
   medidas      BodyLog[]
+  pedidos      Order[]
 
   @@index([apellidos, nombres])
 }
@@ -191,7 +192,44 @@ model Product {
   activo      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
-  items SaleItem[]
+  items   SaleItem[]
+  pedidos OrderItem[]
+}
+
+/// Pedido que el socio arma desde el portal. No es una venta: no mueve stock ni
+/// dinero. Recepcion lo cobra cuando el socio llega al mostrador y recien ahi se
+/// convierte en una venta normal (saleId). Mientras esta pendiente, sus
+/// cantidades se descuentan del disponible que ven los demas socios.
+model Order {
+  id          String    @id @default(cuid())
+  memberId    String
+  /// pendiente | entregado | cancelado | vencido
+  estado      String    @default("pendiente")
+  total       Float
+  nota        String?
+  saleId      String?   @unique
+  /// socio | recepcion | sistema
+  canceladoPor String?
+  atendidoPor String?
+  atendidoAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  member Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  items  OrderItem[]
+
+  @@index([estado, createdAt])
+  @@index([memberId, createdAt])
+}
+
+model OrderItem {
+  id             String @id @default(cuid())
+  orderId        String
+  productId      String
+  cantidad       Int
+  precioUnitario Float
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
 }
 
 /// Venta de mostrador. Puede ir a nombre de un socio o de un visitante.

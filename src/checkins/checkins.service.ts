@@ -26,6 +26,13 @@ export class CheckinsService {
   private readonly REBOTE_SEG = 30;
 
   /**
+   * Nadie entrena en menos de esto. Un segundo escaneo dentro de esta ventana
+   * despues de entrar (el socio vuelve a acercar el celular, o el escaner del
+   * celular de recepcion lo lee dos veces) no lo saca del gimnasio.
+   */
+  private readonly SALIDA_MINIMA_MIN = 3;
+
+  /**
    * Un socio que se fue sin marcar salida no puede quedar "dentro" para siempre.
    * Pasadas estas horas, el sistema le cierra la sesion solo.
    */
@@ -142,6 +149,22 @@ export class CheckinsService {
     }
 
     const dentro = !!ultimo && ultimo.tipo === 'entrada';
+
+    if (
+      !forzarTipo &&
+      dentro &&
+      Date.now() - ultimo.timestamp.getTime() < this.SALIDA_MINIMA_MIN * 60 * 1000
+    ) {
+      const membresia = await this.members.membresiaVigente(socio.id);
+      return {
+        resultado: 'repetido',
+        tipo: 'entrada',
+        motivo: 'Acaba de entrar. La salida se marca recien pasados unos minutos.',
+        socio: this.members.resumen(socio, membresia, true),
+        checkInId: ultimo.id,
+      };
+    }
+
     const tipo: TipoMovimiento = forzarTipo ?? (dentro ? 'salida' : 'entrada');
 
     // Salir siempre se puede, incluso con la membresia vencida: nadie se queda
@@ -264,6 +287,7 @@ export class CheckinsService {
       hora: r.timestamp,
       tipo: r.tipo,
       metodo: r.metodo,
+      dispositivo: r.dispositivo,
       resultado: r.resultado,
       motivo: r.motivo,
       socio: this.members.resumen(r.member, r.membership, r.tipo === 'entrada'),
@@ -321,16 +345,40 @@ export class CheckinsService {
   private readonly PRECHECK_MIN = 3;
 
   /**
+   * Lo que el portal consulta cada pocos segundos para enterarse de que
+   * recepcion ya confirmo el ingreso. Es barato a proposito.
+   */
+  async presencia(memberId: string) {
+    const ultimo = await this.ultimoMovimiento(memberId);
+    const dentro = !!ultimo && ultimo.tipo === 'entrada';
+    return { dentro, desde: dentro ? ultimo!.timestamp : null };
+  }
+
+  /**
    * Boton del portal. Si el socio esta fuera, anuncia su llegada y recepcion
    * confirma (el ingreso lo autoriza recepcion, nunca el celular del socio).
-   * Si esta dentro, marcar salida no necesita permiso de nadie: se registra.
+   * Si esta dentro, marcar salida no necesita permiso de nadie, pero si una
+   * confirmacion explicita: sin ella solo se responde que falta confirmar, asi
+   * un toque accidental en el bolsillo no cierra la sesion.
    */
-  async alternarPresencia(memberId: string) {
+  async alternarPresencia(memberId: string, confirmarSalida = false) {
     const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
     if (!socio) throw new NotFoundException('Socio no encontrado');
 
-    if (await this.estaDentro(memberId)) {
+    const ultimo = await this.ultimoMovimiento(memberId);
+    if (ultimo && ultimo.tipo === 'entrada') {
+      if (!confirmarSalida) {
+        return {
+          accion: 'confirmar_salida' as const,
+          dentro: true,
+          desde: ultimo.timestamp,
+          mensaje: 'Confirma que ya te vas.',
+        };
+      }
       const r = await this.registrar(socio, 'portal', 'portal-socio', 'salida');
+      if (r.resultado !== 'permitido') {
+        throw new BadRequestException('Acabas de entrar. Espera unos segundos para marcar la salida.');
+      }
       return {
         accion: 'salida_registrada' as const,
         dentro: false,

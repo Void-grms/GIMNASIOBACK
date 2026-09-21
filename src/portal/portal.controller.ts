@@ -104,11 +104,19 @@ export class PortalController {
   /**
    * Un solo boton que cambia con el estado: fuera avisa la llegada a recepcion,
    * dentro registra la salida. Entrar necesita confirmacion de recepcion;
-   * salir no necesita permiso de nadie.
+   * salir no necesita permiso de nadie, pero si `confirmarSalida: true`.
    */
   @Post('presence')
+  alternarPresencia(
+    @SesionActual() sesion: Sesion,
+    @Body('confirmarSalida') confirmarSalida?: boolean,
+  ) {
+    return this.checkins.alternarPresencia(this.soloSocio(sesion), confirmarSalida === true);
+  }
+
+  @Get('presence')
   presencia(@SesionActual() sesion: Sesion) {
-    return this.checkins.alternarPresencia(this.soloSocio(sesion));
+    return this.checkins.presencia(this.soloSocio(sesion));
   }
 
   // --------------------------------------------------------- entrenamiento
