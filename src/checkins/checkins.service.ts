@@ -226,7 +226,32 @@ export class CheckinsService {
       );
     }
     if (soloFecha(membresia.fechaInicio).getTime() > hoy.getTime()) {
-      return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia);
+      // La mas lejana todavia no empieza, pero puede haber otra que cubra hoy:
+      // quien renueva antes de vencer tiene la actual vigente y la nueva
+      // encolada detras. Sin esto, renovar temprano le cerraba la puerta.
+      const deHoy = await this.prisma.membership.findFirst({
+        where: { memberId: socio.id, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
+        orderBy: { fechaFin: 'desc' },
+      });
+      if (!deHoy) {
+        return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia);
+      }
+      const checkIn = await this.prisma.checkIn.create({
+        data: {
+          memberId: socio.id,
+          membershipId: deHoy.id,
+          tipo: 'entrada',
+          metodo,
+          dispositivo: dispositivo || null,
+          resultado: 'permitido',
+        },
+      });
+      return {
+        resultado: 'permitido',
+        tipo: 'entrada',
+        socio: this.members.resumen(socio, membresia, true),
+        checkInId: checkIn.id,
+      };
     }
 
     const checkIn = await this.prisma.checkIn.create({
