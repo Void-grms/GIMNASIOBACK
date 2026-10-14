@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.tsbuildinfo
+uploads/
+backups/
+reports/
+*.xlsx

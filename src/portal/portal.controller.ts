@@ -5,7 +5,7 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Length, Max,
-  MaxLength, Min, ValidateNested,
+  MaxLength, Matches, Min, ValidateNested,
 } from 'class-validator';
 import { PortalService } from './portal.service';
 import { CheckinsService } from '../checkins/checkins.service';
@@ -13,10 +13,25 @@ import { GRUPOS_VALIDOS, TrainingService } from '../training/training.service';
 import { Publico } from '../auth/publico.decorator';
 import { SesionActual } from '../auth/sesion.decorator';
 import type { Sesion } from '../auth/jwt.guard';
+import { PermitePinPendiente } from '../auth/pin-pendiente.decorator';
+import { AccesoService } from '../members/acceso.service';
 
 class LoginSocioDto {
-  @IsString() @Length(8, 8) dni: string;
-  @IsString() @Length(4, 4) pin: string;
+  @IsString() @Matches(/^\d{8}$/) dni: string;
+  @IsString() @Matches(/^\d{4}$/) pin: string;
+}
+
+class ConsultarActivacionDto {
+  @IsString() @Matches(/^[A-Za-z0-9_-]{43}$/) token: string;
+}
+
+class ActivacionPortalDto extends ConsultarActivacionDto {
+  @IsString() @Matches(/^\d{8}$/) dni: string;
+  @IsString() @Matches(/^\d{4}$/) pin: string;
+  @IsString() @Matches(/^\d{4}$/) pinConfirmacion: string;
+  @IsBoolean() consentimiento: boolean;
+  @IsString() @MaxLength(100) consentimientoVersion: string;
+  @IsString() @Matches(/^[a-f0-9]{64}$/) consentimientoHuella: string;
 }
 
 class PerfilDto {
@@ -105,6 +120,7 @@ export class PortalController {
     private portal: PortalService,
     private checkins: CheckinsService,
     private training: TrainingService,
+    private acceso: AccesoService,
   ) {}
 
   private soloSocio(sesion: Sesion) {
@@ -126,14 +142,32 @@ export class PortalController {
     return this.portal.login(dto.dni, dto.pin, ip);
   }
 
+  @Publico()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('activacion/consultar')
+  consultarActivacion(@Body() dto: ConsultarActivacionDto) {
+    return this.acceso.consultarActivacion(dto.token);
+  }
+
+  @Publico()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('activacion')
+  activar(@Body() dto: ActivacionPortalDto, @Ip() ip: string) {
+    return this.acceso.consumirActivacion(dto, ip);
+  }
+
+  @PermitePinPendiente()
   @Get('me')
   miPanel(@SesionActual() sesion: Sesion) {
     return this.portal.miPanel(this.soloSocio(sesion));
   }
 
+  @PermitePinPendiente()
   @Patch('me')
   editarPerfil(@SesionActual() sesion: Sesion, @Body() dto: PerfilDto) {
-    return this.portal.actualizarPerfil(this.soloSocio(sesion), dto);
+    return this.portal.actualizarPerfil(this.soloSocio(sesion), dto, sesion.portalVersion);
   }
 
   @Post('foto')

@@ -3,6 +3,31 @@
 NestJS + Prisma. En desarrollo usa SQLite; para produccion cambia el `provider`
 de `prisma/schema.prisma` a `postgresql` y la `DATABASE_URL`.
 
+## Migracion del ERP y acceso al portal
+
+La asistencia acepta el codigo ERP conservado, DNI o QR. El codigo ERP nunca se
+usa como PIN. Si un codigo coincide con el DNI de otro socio, recepcion puede
+indicar `ERP:1277` o `DNI:12345678` para resolver la coincidencia.
+
+Las fichas importadas pueden quedar con DNI pendiente. Recepcion verifica el
+documento y el celular, completa la ficha y entrega un PIN aleatorio de 24 horas
+o prepara una invitacion de WhatsApp. Los PIN temporales solo permiten cambiar
+el PIN en el perfil. Cambiarlo invalida las sesiones anteriores.
+
+Configura `PORTAL_URL` con la URL base del portal, por ejemplo
+`https://tu-gimnasio.example/portal` (HTTPS obligatorio en produccion). La
+invitacion vence en 24 horas y se consume una sola vez. El token se guarda
+solo como hash y viaja en el fragmento del enlace. WhatsApp se abre con
+el texto listo; recepcion revisa el destinatario y realiza el envio.
+
+El importador revisa el archivo sin modificar la base por defecto. Consulta
+[la guia de migracion](docs/MIGRACION_ERP.md) para los comandos, incidencias y
+las reglas de importacion del historial. No genera pagos ni consentimientos
+a partir del Excel.
+
+Validacion: `npm run build`, `npm run test:logica`,
+`npm run test:asistencia-erp`, `npm run test:acceso` y `npm run test:importacion`.
+
 ## Arrancar
 
 ```bash

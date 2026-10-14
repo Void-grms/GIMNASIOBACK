@@ -182,8 +182,8 @@ export class ProductsService {
 
     const datos: DatosComprobante = dto.comprobante ?? {
       tipo: 'boleta',
-      clienteTipoDoc: socio ? 'dni' : 'sin_documento',
-      clienteNumDoc: socio?.dni,
+      clienteTipoDoc: socio?.dni ? 'dni' : 'sin_documento',
+      clienteNumDoc: socio?.dni || undefined,
       clienteNombre: socio ? `${socio.nombres} ${socio.apellidos}` : 'Cliente varios',
     };
 
