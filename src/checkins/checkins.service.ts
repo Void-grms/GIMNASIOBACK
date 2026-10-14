@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
 import { diasRestantes, hoyLima, soloFecha } from '../common/fechas';
+import { leerIdentificador } from './identificador';
 
 export type TipoMovimiento = 'entrada' | 'salida';
 
@@ -85,7 +86,7 @@ export class CheckinsService {
   // ----------------------------------------------------------------- escaneo
 
   /**
-   * Entrada unica de recepcion: acepta el QR del socio o su DNI tecleado.
+   * Entrada de recepcion: acepta QR, DNI y el codigo conservado del ERP.
    * El lector USB se comporta como teclado, asi que ambos llegan igual.
    *
    * No hay que elegir entre entrada y salida: el sistema alterna solo segun
@@ -101,7 +102,7 @@ export class CheckinsService {
     if (memberIdQr) {
       const credencial = await this.prisma.credential.findUnique({
         where: { memberId: memberIdQr },
-        include: { member: true },
+        include: { member: { include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } } } },
       });
       if (!credencial || !credencial.activo || !credencial.member) {
         return this.denegar(null, 'entrada', 'qr', dispositivo, 'Credencial no reconocida o revocada');
@@ -118,15 +119,32 @@ export class CheckinsService {
       return this.registrar(credencial.member, 'qr', dispositivo);
     }
 
-    const dni = texto.replace(/\D/g, '');
-    if (dni.length !== 8) {
+    const identificador = leerIdentificador(texto);
+    if (!identificador) {
       return this.denegar(null, 'entrada', 'manual', dispositivo, 'Codigo no reconocido');
     }
-    const socio = await this.members.porDni(dni);
-    if (!socio) {
-      return this.denegar(null, 'entrada', 'manual', dispositivo, `Sin socio con DNI ${dni}`);
+    const { tipo, valor } = identificador;
+    const candidatos = await this.prisma.member.findMany({
+      where: tipo === 'erp'
+        ? { codigoERP: valor }
+        : tipo === 'dni'
+          ? { dni: valor }
+          : { OR: [{ codigoERP: valor }, ...(valor.length === 8 ? [{ dni: valor }] : [])] },
+      take: 2,
+      include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } },
+    });
+    if (candidatos.length > 1) {
+      return this.denegar(
+        null, 'entrada', 'manual', dispositivo,
+        'Coinciden el codigo ERP y el DNI de distintos socios. Escribe ERP: seguido del codigo o DNI: seguido del documento.',
+      );
     }
-    return this.registrar(socio, 'manual', dispositivo);
+    const socio = candidatos[0];
+    if (!socio) {
+      return this.denegar(null, 'entrada', 'manual', dispositivo, 'No hay socio con ese codigo o DNI');
+    }
+    const metodo = tipo === 'erp' || (socio.codigoERP === valor && socio.dni !== valor) ? 'erp' : 'manual';
+    return this.registrar(socio, metodo, dispositivo);
   }
 
   /** Decide si toca entrada o salida y aplica las reglas de cada una. */

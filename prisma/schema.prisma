@@ -31,7 +31,11 @@ model User {
 /// Socio del gimnasio.
 model Member {
   id               String    @id @default(cuid())
-  dni              String    @unique
+  dni              String?   @unique
+  /// Identificador de asistencia conservado del ERP, nunca una contrasena.
+  codigoERP        String?   @unique
+  /// Documento tal como aparecia en la exportacion; puede estar incompleto.
+  documentoERP     String?
   nombres          String
   apellidos        String
   telefono         String?
@@ -43,6 +47,9 @@ model Member {
   pinHash          String
   /// Mientras sea false, el portal obliga a cambiarlo antes de seguir.
   pinCambiado      Boolean   @default(false)
+  pinTemporalHasta DateTime?
+  /// Incrementar al cambiar credenciales para revocar sesiones anteriores.
+  portalVersion    Int       @default(0)
   intentosFallidos Int       @default(0)
   bloqueadoHasta   DateTime?
   notas            String?
@@ -72,8 +79,23 @@ model Member {
   planSemanal    WeekPlan[]
   plantillas     SessionTemplate[]
   notasEjercicio ExerciseNote[]
+  activacionesPortal PortalActivation[]
 
   @@index([apellidos, nombres])
+}
+
+/// Invitacion de un solo uso. El token en claro solo se entrega al emitirla.
+model PortalActivation {
+  id        String    @id @default(cuid())
+  memberId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, usedAt])
 }
 
 /// Catalogo de planes. Precio y duracion en dias.
@@ -96,6 +118,8 @@ model Plan {
 /// Una membresia comprada por un socio. El pase diario es una membresia de 1 dia.
 model Membership {
   id           String   @id @default(cuid())
+  codigoERP    String?  @unique
+  estadoERP    String?
   memberId     String
   planId       String
   /// Fecha de inicio, normalizada a las 00:00 hora de Lima
@@ -103,7 +127,7 @@ model Membership {
   /// Ultimo dia valido inclusive: inicio + (duracionDias - 1)
   fechaFin     DateTime
   precioPagado Float
-  estado       String   @default("activa") // activa | anulada
+  estado       String   @default("activa") // activa | vencida | anulada
   observacion  String?
   createdAt    DateTime @default(now())
 

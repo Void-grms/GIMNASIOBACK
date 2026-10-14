@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
-import { randomInt } from 'crypto';
 import { join } from 'path';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,6 +7,7 @@ import { QrService } from '../qr/qr.service';
 import { SettingsService } from '../settings/settings.service';
 import { diasRestantes, formatoFecha, hoyLima } from '../common/fechas';
 import { carpetaArchivos, esPostgres } from '../common/archivos';
+import { DURACION_ACCESO_MS, consentimientoPendiente, estadoPortal, pinAleatorio, sinSecretos, validarDniPortal } from './acceso.util';
 
 export type EstadoSocio = 'vigente' | 'por_vencer' | 'vencido' | 'sin_membresia';
 
@@ -22,10 +22,6 @@ export class MembersService {
     private settings: SettingsService,
   ) {}
 
-  private soloDigitos(v: string) {
-    return (v || '').replace(/\D/g, '');
-  }
-
   async crear(dto: {
     dni: string;
     nombres: string;
@@ -36,11 +32,11 @@ export class MembersService {
     direccion?: string;
     esUniversitario?: boolean;
     notas?: string;
-    pin?: string;
+    codigoERP?: string;
     consentimiento?: boolean;
   }) {
-    const dni = this.soloDigitos(dto.dni);
-    if (dni.length !== 8) throw new BadRequestException('El DNI debe tener 8 digitos');
+    const dni = validarDniPortal(dto.dni);
+    const codigoERP = this.codigoERP(dto.codigoERP);
 
     const repetido = await this.prisma.member.findUnique({ where: { dni } });
     if (repetido) throw new BadRequestException(`Ya existe un socio con el DNI ${dni}`);
@@ -56,12 +52,17 @@ export class MembersService {
     // El PIN se genera al azar, no se deriva del DNI: quien conoce el documento
     // no debe poder entrar al portal del socio. Recepcion lo entrega una vez y
     // el portal obliga a cambiarlo en el primer ingreso.
-    const pin = dto.pin ? this.soloDigitos(dto.pin) : this.pinAleatorio();
-    if (pin.length !== 4) throw new BadRequestException('El PIN debe tener 4 digitos');
+    const pin = pinAleatorio(dni, codigoERP);
+    const pinTemporalHasta = new Date(Date.now() + DURACION_ACCESO_MS);
+    const ajustes = await this.settings.obtener();
+    if (codigoERP && await this.prisma.member.findUnique({ where: { codigoERP } })) {
+      throw new BadRequestException('El codigo ERP ya pertenece a otro socio');
+    }
 
     const socio = await this.prisma.member.create({
       data: {
         dni,
+        codigoERP,
         nombres: dto.nombres.trim(),
         apellidos: dto.apellidos.trim(),
         telefono: dto.telefono?.trim() || null,
@@ -71,21 +72,24 @@ export class MembersService {
         esUniversitario: !!dto.esUniversitario,
         notas: dto.notas || null,
         pinHash: bcrypt.hashSync(pin, 10),
-        pinCambiado: !!dto.pin,
+        pinCambiado: false,
+        pinTemporalHasta,
         credential: { create: { tipo: 'qr', secret: this.qr.nuevoSecreto() } },
+        consents: { create: { tipo: 'datos_personales', version: ajustes.consentimientoVersion, texto: ajustes.consentimientoTexto, origen: 'recepcion', aceptado: true } },
       },
+      include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1 } },
     });
-
-    await this.registrarConsentimiento(socio.id, 'datos_personales', 'recepcion');
 
     // El PIN en claro viaja una sola vez, en esta respuesta, para que recepcion
     // se lo entregue al socio. No se guarda en ningun lado.
-    return { ...socio, pinInicial: pin };
+    return { ...sinSecretos(socio), ...this.resumen(socio, null), pinInicial: pin, vence: pinTemporalHasta.toISOString() };
   }
 
-  /** Cuatro digitos al azar, sin relacion con el documento del socio. */
-  private pinAleatorio(): string {
-    return String(randomInt(0, 10000)).padStart(4, '0');
+  private codigoERP(valor?: string): string | null {
+    if (valor === undefined || valor === null || valor.trim() === '') return null;
+    const codigo = valor.trim();
+    if (!/^\d{1,20}$/.test(codigo)) throw new BadRequestException('El codigo ERP debe contener entre 1 y 20 digitos');
+    return codigo;
   }
 
   /**
@@ -109,19 +113,39 @@ export class MembersService {
   }
 
   async actualizar(id: string, dto: Record<string, any>) {
+    const previo = await this.prisma.member.findUnique({ where: { id } });
+    if (!previo) throw new NotFoundException('Socio no encontrado');
+    if (dto.pin !== undefined) throw new BadRequestException('Usa la opcion de PIN temporal para restablecer el acceso');
+    if (['dni', 'telefono', 'codigoERP'].some((campo) => dto[campo] !== undefined) && dto.identidadVerificada !== true) {
+      throw new BadRequestException('Recepcion debe verificar la identidad antes de modificar DNI, telefono o codigo ERP');
+    }
     const data: Record<string, any> = {};
     for (const campo of ['nombres', 'apellidos', 'telefono', 'email', 'fotoUrl', 'notas']) {
       if (dto[campo] !== undefined) data[campo] = dto[campo];
     }
     if (dto.esUniversitario !== undefined) data.esUniversitario = !!dto.esUniversitario;
     if (dto.activo !== undefined) data.activo = !!dto.activo;
-    if (dto.pin) {
-      const pin = this.soloDigitos(dto.pin);
-      if (pin.length !== 4) throw new BadRequestException('El PIN debe tener 4 digitos');
-      data.pinHash = bcrypt.hashSync(pin, 10);
-      data.pinCambiado = true;
+    if (dto.dni !== undefined) {
+      data.dni = validarDniPortal(dto.dni);
+      const existe = await this.prisma.member.findUnique({ where: { dni: data.dni } });
+      if (existe && existe.id !== id) throw new BadRequestException('El DNI ya pertenece a otro socio');
     }
-    return this.prisma.member.update({ where: { id }, data });
+    if (dto.codigoERP !== undefined) {
+      data.codigoERP = this.codigoERP(dto.codigoERP);
+      if (data.codigoERP) {
+        const existe = await this.prisma.member.findUnique({ where: { codigoERP: data.codigoERP } });
+        if (existe && existe.id !== id) throw new BadRequestException('El codigo ERP ya pertenece a otro socio');
+      }
+    }
+    const revocar = ['dni', 'telefono', 'codigoERP', 'activo'].some((campo) => data[campo] !== undefined && data[campo] !== previo[campo]);
+    if (revocar) data.portalVersion = { increment: 1 };
+    if (data.activo === false) Object.assign(data, { pinHash: bcrypt.hashSync(pinAleatorio(), 10), pinCambiado: false, pinTemporalHasta: null });
+    const socio = await this.prisma.$transaction(async (tx) => {
+      const actualizado = await tx.member.update({ where: { id }, data, include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1 } } });
+      if (revocar) await tx.portalActivation.updateMany({ where: { memberId: id, usedAt: null }, data: { usedAt: new Date() } });
+      return actualizado;
+    });
+    return { ...sinSecretos(socio), ...this.resumen(socio, null) };
   }
 
   async buscar(q?: string, limite = 50) {
@@ -134,6 +158,7 @@ export class MembersService {
         ? {
             OR: [
               { dni: { contains: texto } },
+              { codigoERP: { contains: texto } },
               { nombres: { contains: texto, ...sinMayus } },
               { apellidos: { contains: texto, ...sinMayus } },
             ],
@@ -141,7 +166,7 @@ export class MembersService {
         : undefined,
       orderBy: [{ apellidos: 'asc' }, { nombres: 'asc' }],
       take: limite,
-      include: { memberships: { orderBy: { fechaFin: 'desc' }, take: 1, include: { plan: true } } },
+      include: { memberships: { orderBy: { fechaFin: 'desc' }, take: 1, include: { plan: true } }, consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } },
     });
     return socios.map((s) => this.resumen(s, s.memberships[0]));
   }
@@ -165,19 +190,21 @@ export class MembersService {
         },
         payments: { orderBy: { fecha: 'desc' }, take: 20 },
         checkIns: { orderBy: { timestamp: 'desc' }, take: 20 },
+        consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1 },
       },
     });
     if (!socio) throw new NotFoundException('Socio no encontrado');
-    const vigente = socio.memberships.find((m) => m.estado === 'activa') || null;
+    const vigente = socio.memberships.find((m) => m.estado === 'activa') || socio.memberships.find((m) => m.estado === 'vencida') || null;
     return {
       ...this.resumen(socio, vigente, await this.estaDentro(id)),
-      socio,
+      socio: { ...sinSecretos(socio), ...this.resumen(socio, vigente) },
       historial: socio.memberships,
     };
   }
 
   async porDni(dni: string) {
-    return this.prisma.member.findUnique({ where: { dni: this.soloDigitos(dni) } });
+    if (!/^\d{8}$/.test(dni || '')) return null;
+    return this.prisma.member.findUnique({ where: { dni }, include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } } });
   }
 
   /**
@@ -187,7 +214,8 @@ export class MembersService {
   resumen(socio: any, membresia: any | null, dentro = false) {
     const dias = membresia ? diasRestantes(membresia.fechaFin) : null;
     let estado: EstadoSocio = 'sin_membresia';
-    if (membresia && dias !== null) {
+    if (membresia?.estado === 'vencida') estado = 'vencido';
+    else if (membresia && membresia.estado !== 'anulada' && dias !== null) {
       if (dias < 0) estado = 'vencido';
       else if (dias <= this.AVISO_DIAS) estado = 'por_vencer';
       else estado = 'vigente';
@@ -195,6 +223,11 @@ export class MembersService {
     return {
       id: socio.id,
       dni: socio.dni,
+      codigoERP: socio.codigoERP ?? null,
+      documentoERP: socio.documentoERP ?? null,
+      estadoPortal: estadoPortal(socio),
+      pinTemporalHasta: socio.pinTemporalHasta ? new Date(socio.pinTemporalHasta).toISOString() : null,
+      consentimientoPendiente: consentimientoPendiente(socio),
       nombres: socio.nombres,
       apellidos: socio.apellidos,
       nombreCompleto: `${socio.nombres} ${socio.apellidos}`,
@@ -250,7 +283,7 @@ export class MembersService {
 
     // El sufijo obliga al navegador a recargar la foto cuando se reemplaza.
     const fotoUrl = `/uploads/socios/${memberId}.${extension}?v=${Date.now()}`;
-    return this.prisma.member.update({ where: { id: memberId }, data: { fotoUrl } });
+    return sinSecretos(await this.prisma.member.update({ where: { id: memberId }, data: { fotoUrl } }));
   }
 
   /**
@@ -274,12 +307,11 @@ export class MembersService {
     });
     if (!socio) throw new NotFoundException('Socio no encontrado');
 
-    const { pinHash, ...sinSecretos } = socio as any;
     return {
       generadoEl: new Date().toISOString(),
       aviso:
         'Copia de los datos personales que este gimnasio trata sobre el titular, entregada a su solicitud.',
-      datos: sinSecretos,
+      datos: sinSecretos(socio),
     };
   }
 
@@ -291,23 +323,28 @@ export class MembersService {
   async anonimizar(memberId: string, motivo: string) {
     const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
     if (!socio) throw new NotFoundException('Socio no encontrado');
-    if (socio.dni.startsWith('ANON')) throw new BadRequestException('Ese socio ya fue anonimizado');
+    if (socio.dni?.startsWith('ANON')) throw new BadRequestException('Ese socio ya fue anonimizado');
 
     if (socio.fotoUrl) {
       const archivo = join(carpetaArchivos(), socio.fotoUrl.split('?')[0].replace(/^\/uploads\//, ''));
       if (existsSync(archivo)) unlinkSync(archivo);
     }
 
-    await this.prisma.credential.deleteMany({ where: { memberId } });
     // Lo que el socio anoto de si mismo se va con el; los pagos y comprobantes
     // se quedan porque los exige la norma tributaria.
-    await this.prisma.bodyLog.deleteMany({ where: { memberId } });
-    await this.prisma.workoutSet.deleteMany({ where: { memberId } });
-
-    return this.prisma.member.update({
-      where: { id: memberId },
-      data: {
+    const actualizado = await this.prisma.$transaction(async (tx) => {
+      await tx.credential.deleteMany({ where: { memberId } });
+      await tx.bodyLog.deleteMany({ where: { memberId } });
+      await tx.workoutSet.deleteMany({ where: { memberId } });
+      await tx.portalActivation.deleteMany({ where: { memberId } });
+      return tx.member.update({ where: { id: memberId }, data: {
         dni: `ANON-${memberId.slice(-8)}`,
+        codigoERP: null,
+        documentoERP: null,
+        portalVersion: { increment: 1 },
+        pinHash: bcrypt.hashSync(pinAleatorio(), 10),
+        pinCambiado: false,
+        pinTemporalHasta: null,
         nombres: 'Socio',
         apellidos: 'anonimizado',
         telefono: null,
@@ -316,7 +353,8 @@ export class MembersService {
         fotoUrl: null,
         notas: `Datos suprimidos a solicitud del titular. Motivo: ${motivo || 'no indicado'}`,
         activo: false,
-      },
+      } });
     });
+    return sinSecretos(actualizado);
   }
 }

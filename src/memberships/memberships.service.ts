@@ -106,8 +106,8 @@ export class MembershipsService {
     // pago ya esta registrado y se puede reemitir, que es el orden correcto.
     const datos: DatosComprobante = dto.comprobante ?? {
       tipo: 'boleta',
-      clienteTipoDoc: 'dni',
-      clienteNumDoc: socio.dni,
+      clienteTipoDoc: socio.dni ? 'dni' : 'sin_documento',
+      clienteNumDoc: socio.dni || undefined,
       clienteNombre: `${socio.nombres} ${socio.apellidos}`,
     };
 

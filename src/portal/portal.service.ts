@@ -5,7 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
 import { IntentosService } from '../auth/intentos.service';
-import { diaLimaDe, formatoFecha } from '../common/fechas';
+import { diaLimaDe } from '../common/fechas';
+import { validarPin } from '../members/acceso.util';
 
 @Injectable()
 export class PortalService {
@@ -18,10 +19,7 @@ export class PortalService {
   ) {}
 
   /**
-   * Login del socio: DNI + PIN de 4 digitos (por defecto los ultimos 4 del DNI).
-   * Es deliberadamente simple porque nadie recuerda una contrasena que usa una
-   * vez al mes. Si el portal llega a mostrar datos sensibles, cambiar a codigo
-   * por WhatsApp.
+   * Login del socio: DNI + PIN elegido, o temporal con vencimiento real.
    */
   async login(dni: string, pin: string, ip?: string) {
     const socio = await this.members.porDni(dni);
@@ -52,6 +50,10 @@ export class PortalService {
       );
     }
 
+    if (!socio.pinCambiado && (!socio.pinTemporalHasta || socio.pinTemporalHasta.getTime() <= Date.now())) {
+      throw new UnauthorizedException('El acceso temporal no esta vigente. Solicita un PIN o enlace en recepcion');
+    }
+
     await this.prisma.member.update({
       where: { id: socio.id },
       data: { intentosFallidos: 0, bloqueadoHasta: null },
@@ -59,21 +61,36 @@ export class PortalService {
     await this.intentos.registrar('socio', dni, true, ip);
 
     // La sesion dura poco mientras el PIN siga siendo el que entrego recepcion.
-    const token = await this.jwt.signAsync(
-      { sub: socio.id, tipo: 'socio', nombre: socio.nombres },
-      { expiresIn: socio.pinCambiado ? '30d' : '1h' },
-    );
+    const token = await this.tokenSesion(socio);
     return {
       access_token: token,
       debeCambiarPin: !socio.pinCambiado,
-      socio: this.members.resumen(socio, null),
+      socio: socio.pinCambiado ? this.members.resumen(socio, null) : this.perfilMinimo(socio),
+    };
+  }
+
+  private tokenSesion(socio: any) {
+    const expiresIn = socio.pinCambiado ? 30 * 24 * 3600 : Math.min(3600, Math.floor((socio.pinTemporalHasta.getTime() - Date.now()) / 1000));
+    if (expiresIn <= 0) throw new UnauthorizedException('El PIN temporal ha vencido');
+    return this.jwt.signAsync({ sub: socio.id, tipo: 'socio', nombre: socio.nombres, portalVersion: socio.portalVersion, debeCambiarPin: !socio.pinCambiado }, { expiresIn });
+  }
+
+  private perfilMinimo(socio: any) {
+    return {
+      id: socio.id, dni: socio.dni, nombres: socio.nombres, apellidos: socio.apellidos,
+      nombreCompleto: `${socio.nombres} ${socio.apellidos}`, telefono: socio.telefono, email: socio.email,
+      debeCambiarPin: true, pinTemporalHasta: socio.pinTemporalHasta?.toISOString() ?? null, estadoPortal: 'pin_temporal',
     };
   }
 
   async miPanel(memberId: string) {
+    const perfil = await this.prisma.member.findUnique({ where: { id: memberId } });
+    if (!perfil) throw new NotFoundException('Socio no encontrado');
+    if (!perfil.pinCambiado) return this.perfilMinimo(perfil);
     const socio = await this.prisma.member.findUnique({
       where: { id: memberId },
       include: {
+        consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } },
         payments: { orderBy: { fecha: 'desc' }, take: 10 },
         checkIns: {
           where: { resultado: 'permitido' },
@@ -143,9 +160,15 @@ export class PortalService {
       pinNuevo?: string;
       ocultarEnRanking?: boolean;
     },
+    version?: number,
   ) {
     const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
     if (!socio) throw new NotFoundException('Socio no encontrado');
+    if (!socio.activo || (version !== undefined && version !== socio.portalVersion)) throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');
+    if (!socio.pinCambiado) {
+      if (!socio.pinTemporalHasta || socio.pinTemporalHasta.getTime() <= Date.now()) throw new UnauthorizedException('El PIN temporal ha vencido');
+      if (!dto.pinNuevo) throw new BadRequestException('Cambia tu PIN temporal antes de editar el perfil');
+    }
 
     const data: Record<string, any> = {};
     if (dto.telefono !== undefined) data.telefono = dto.telefono.trim() || null;
@@ -153,23 +176,30 @@ export class PortalService {
     if (dto.ocultarEnRanking !== undefined) data.ocultarEnRanking = dto.ocultarEnRanking;
 
     if (dto.pinNuevo) {
-      const nuevo = dto.pinNuevo.replace(/\D/g, '');
-      if (nuevo.length !== 4) throw new BadRequestException('El PIN nuevo debe tener 4 digitos');
+      const nuevo = validarPin(dto.pinNuevo, socio.dni, socio.codigoERP);
       if (!dto.pinActual || !bcrypt.compareSync(dto.pinActual, socio.pinHash)) {
         throw new BadRequestException('El PIN actual no coincide');
       }
       if (nuevo === dto.pinActual) {
         throw new BadRequestException('El PIN nuevo tiene que ser distinto del actual');
       }
-      if (/^(\d)\1{3}$/.test(nuevo) || ['1234', '0123', '4321'].includes(nuevo)) {
-        throw new BadRequestException('Ese PIN es demasiado facil de adivinar');
-      }
       data.pinHash = bcrypt.hashSync(nuevo, 10);
       data.pinCambiado = true;
+      data.pinTemporalHasta = null;
+      data.portalVersion = { increment: 1 };
+      data.intentosFallidos = 0;
+      data.bloqueadoHasta = null;
     }
 
-    await this.prisma.member.update({ where: { id: memberId }, data });
-    return { ok: true };
+    const actualizado = await this.prisma.$transaction(async (tx) => {
+      const resultado = await tx.member.updateMany({ where: { id: memberId, activo: true, portalVersion: socio.portalVersion }, data });
+      if (resultado.count !== 1) throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');
+      if (dto.pinNuevo || (dto.telefono !== undefined && data.telefono !== socio.telefono)) {
+        await tx.portalActivation.updateMany({ where: { memberId, usedAt: null }, data: { usedAt: new Date() } });
+      }
+      return tx.member.findUnique({ where: { id: memberId } });
+    });
+    return dto.pinNuevo ? { ok: true, access_token: await this.tokenSesion(actualizado), debeCambiarPin: false } : { ok: true };
   }
 
   /** Selfie del socio desde su propio celular. */

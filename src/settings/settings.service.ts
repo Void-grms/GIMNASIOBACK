@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MENSAJE_NUEVO, MENSAJE_RENOVACION } from '../messages/plantillas';
+import { createHash } from 'crypto';
 
 /** Regimenes que si trasladan IGV. El NRUS paga cuota fija y no lo desglosa. */
 const REGIMENES_CON_IGV = ['rer', 'rmt', 'general'];
@@ -11,11 +12,15 @@ export class SettingsService {
 
   /** Siempre existe: si no esta, se crea con los valores por defecto. */
   async obtener() {
-    return this.prisma.settings.upsert({
+    const ajustes = await this.prisma.settings.upsert({
       where: { id: 'default' },
       update: {},
       create: { id: 'default' },
     });
+    return {
+      ...ajustes,
+      consentimientoHuella: createHash('sha256').update(ajustes.consentimientoTexto).digest('hex'),
+    };
   }
 
   async actualizar(dto: Record<string, any>) {
@@ -59,6 +64,7 @@ export class SettingsService {
       privacidadTexto: s.privacidadTexto,
       consentimientoVersion: s.consentimientoVersion,
       consentimientoTexto: s.consentimientoTexto,
+      consentimientoHuella: s.consentimientoHuella,
       yapeNumero: s.yapeNumero,
       yapeTitular: s.yapeTitular,
       aforoMaximo: s.aforoMaximo,
