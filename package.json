@@ -18,7 +18,7 @@
     "db:elegir": "node scripts/elegir-base.js",
     "db:seed:prod": "node dist/prisma/seed.js",
     "railway:build": "node scripts/elegir-base.js && prisma generate && nest build",
-    "railway:predeploy": "node scripts/elegir-base.js && prisma db push --skip-generate && node dist/prisma/seed.js"
+    "railway:predeploy": "node scripts/elegir-base.js && node scripts/migrar-acceso-erp.js && prisma db push --skip-generate && node dist/prisma/seed.js"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

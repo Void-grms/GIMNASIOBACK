@@ -33,6 +33,13 @@ No se infiere que el nombre de un plan antiguo corresponda al catalogo actual. L
 
 ## Aplicar a una base elegida
 
+En Railway, el predeploy ejecuta `scripts/migrar-acceso-erp.js` para agregar los
+campos e indices ERP en PostgreSQL dentro de una transaccion. Los cambios son
+idempotentes y conservan los datos. Despues `prisma db push --skip-generate`
+verifica el esquema completo sin aceptar advertencias de perdida de datos.
+La migracion se limita al esquema `public`; una base nueva se crea mediante
+`db push`. Las ejecuciones concurrentes se serializan con un bloqueo de transaccion.
+
 Antes de aplicar, verificar la base de destino y disponer de un respaldo recuperable. Probar primero con una base local aislada. El script exige `--apply` y `DATABASE_URL` definida explicitamente en el entorno; no toma por su cuenta una URL del archivo `.env`. El esquema de destino debe estar actualizado con los campos ERP y de activacion del portal.
 
 ```powershell
