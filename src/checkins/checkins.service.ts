@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
@@ -49,11 +50,42 @@ export class CheckinsService {
   // ---------------------------------------------------------------- presencia
 
   /** Ultimo movimiento valido del socio. */
-  private async ultimoMovimiento(memberId: string) {
-    return this.prisma.checkIn.findFirst({
+  private async ultimoMovimiento(memberId: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.checkIn.findFirst({
       where: { memberId, resultado: 'permitido' },
-      orderBy: { timestamp: 'desc' },
+      orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
     });
+  }
+
+  /** Todos los escritores de presencia toman primero el mismo lock de base por socio. */
+  private async conSocioBloqueado<T>(memberId: string, trabajo: (tx: Prisma.TransactionClient, socio: any) => Promise<T>): Promise<T> {
+    for (let intento = 0; intento < 3; intento++) {
+      try {
+        return await this.prisma.$transaction(async tx => {
+          // UPDATE bloquea la fila hasta commit en PostgreSQL y toma el lock de escritura en SQLite.
+          // Incrementar cero conserva las sesiones del portal y funciona entre varias replicas.
+          const bloqueado = await tx.member.updateMany({ where: { id: memberId }, data: { portalVersion: { increment: 0 } } });
+          if (bloqueado.count !== 1) throw new NotFoundException('Socio no encontrado');
+          const socio = await tx.member.findUnique({
+            where: { id: memberId },
+            include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } },
+          });
+          if (!socio) throw new NotFoundException('Socio no encontrado');
+          return trabajo(tx, socio);
+        }, { maxWait: 10000, timeout: 10000 });
+      } catch (error) {
+        if (error?.code === 'P2028') throw new ServiceUnavailableException('Hay otro registro en curso. Intenta de nuevo en unos segundos.');
+        // La transaccion fallida ya se revirtio: una colision de escritores se vuelve a leer completa.
+        const reintentable = ['P2034', 'P1008'].includes(error?.code);
+        if (!reintentable) throw error;
+        if (intento === 2) throw new ServiceUnavailableException('Hay otro registro en curso. Intenta de nuevo en unos segundos.');
+        await new Promise(resolve => setTimeout(resolve, 25 * (intento + 1)));
+      }
+    }
+  }
+
+  private membresiaVigente(memberId: string, db: Prisma.TransactionClient) {
+    return db.membership.findFirst({ where: { memberId, estado: 'activa' }, orderBy: { fechaFin: 'desc' }, include: { plan: true } });
   }
 
   async estaDentro(memberId: string): Promise<boolean> {
@@ -69,7 +101,7 @@ export class CheckinsService {
     const desde = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const movimientos = await this.prisma.checkIn.findMany({
       where: { resultado: 'permitido', timestamp: { gte: desde } },
-      orderBy: { timestamp: 'desc' },
+      orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
       select: { memberId: true, tipo: true, timestamp: true },
     });
 
@@ -154,10 +186,28 @@ export class CheckinsService {
     dispositivo?: string,
     forzarTipo?: TipoMovimiento,
   ): Promise<ResultadoCheckIn> {
-    const ultimo = await this.ultimoMovimiento(socio.id);
+    return this.conSocioBloqueado(socio.id, (tx, actual) => this.registrarBloqueado(actual, metodo, dispositivo, forzarTipo, tx));
+  }
+
+  /** Leer ultimo, decidir y escribir pertenecen a la misma transaccion y al mismo socio bloqueado. */
+  private async registrarBloqueado(
+    socio: any,
+    metodo: string,
+    dispositivo: string | undefined,
+    forzarTipo: TipoMovimiento | undefined,
+    tx: Prisma.TransactionClient,
+  ): Promise<ResultadoCheckIn> {
+    const ultimo = await this.ultimoMovimiento(socio.id, tx);
+
+    // Dos confirmaciones explicitas de entrada/salida no deben crear movimientos consecutivos iguales.
+    if (forzarTipo && ((ultimo && ultimo.tipo === forzarTipo) || (!ultimo && forzarTipo === 'salida'))) {
+      const membresia = await this.membresiaVigente(socio.id, tx);
+      return { resultado: 'repetido', tipo: forzarTipo, motivo: `El socio ya tiene registrada la ${forzarTipo}`,
+        socio: this.members.resumen(socio, membresia, forzarTipo === 'entrada'), checkInId: ultimo?.id ?? null };
+    }
 
     if (ultimo && Date.now() - ultimo.timestamp.getTime() < this.REBOTE_SEG * 1000) {
-      const membresia = await this.members.membresiaVigente(socio.id);
+      const membresia = await this.membresiaVigente(socio.id, tx);
       return {
         resultado: 'repetido',
         tipo: ultimo.tipo as TipoMovimiento,
@@ -174,7 +224,7 @@ export class CheckinsService {
       dentro &&
       Date.now() - ultimo.timestamp.getTime() < this.SALIDA_MINIMA_MIN * 60 * 1000
     ) {
-      const membresia = await this.members.membresiaVigente(socio.id);
+      const membresia = await this.membresiaVigente(socio.id, tx);
       return {
         resultado: 'repetido',
         tipo: 'entrada',
@@ -189,10 +239,10 @@ export class CheckinsService {
     // Salir siempre se puede, incluso con la membresia vencida: nadie se queda
     // encerrado por no haber pagado.
     if (tipo === 'salida') {
-      const membresia = await this.members.membresiaVigente(socio.id);
-      const casillero = await this.liberarCasillero(socio.id);
+      const membresia = await this.membresiaVigente(socio.id, tx);
+      const casillero = await this.liberarCasillero(socio.id, tx);
       const aviso = casillero ? `Casillero ${casillero} liberado: que devuelva la llave.` : undefined;
-      const checkIn = await this.prisma.checkIn.create({
+      const checkIn = await tx.checkIn.create({
         data: {
           memberId: socio.id,
           membershipId: membresia?.id || null,
@@ -200,6 +250,7 @@ export class CheckinsService {
           metodo,
           dispositivo: dispositivo || null,
           resultado: 'permitido',
+          timestamp: new Date(),
           motivo: aviso ?? null,
         },
       });
@@ -213,24 +264,25 @@ export class CheckinsService {
       };
     }
 
-    return this.evaluarEntrada(socio, metodo, dispositivo);
+    return this.evaluarEntrada(socio, metodo, dispositivo, tx);
   }
 
   /** Reglas de la entrada: socio activo, membresia vigente y ya empezada. */
   private async evaluarEntrada(
     socio: any,
     metodo: string,
-    dispositivo?: string,
+    dispositivo: string | undefined,
+    tx: Prisma.TransactionClient,
   ): Promise<ResultadoCheckIn> {
     if (!socio.activo) {
-      return this.denegar(socio, 'entrada', metodo, dispositivo, 'Socio dado de baja');
+      return this.denegar(socio, 'entrada', metodo, dispositivo, 'Socio dado de baja', null, tx);
     }
 
-    const membresia = await this.members.membresiaVigente(socio.id);
+    const membresia = await this.membresiaVigente(socio.id, tx);
     const hoy = hoyLima();
 
     if (!membresia) {
-      return this.denegar(socio, 'entrada', metodo, dispositivo, 'Sin membresia registrada');
+      return this.denegar(socio, 'entrada', metodo, dispositivo, 'Sin membresia registrada', null, tx);
     }
     if (soloFecha(membresia.fechaFin).getTime() < hoy.getTime()) {
       const dias = Math.abs(diasRestantes(membresia.fechaFin));
@@ -241,20 +293,21 @@ export class CheckinsService {
         dispositivo,
         `Membresia vencida hace ${dias} dia(s)`,
         membresia,
+        tx,
       );
     }
     if (soloFecha(membresia.fechaInicio).getTime() > hoy.getTime()) {
       // La mas lejana todavia no empieza, pero puede haber otra que cubra hoy:
       // quien renueva antes de vencer tiene la actual vigente y la nueva
       // encolada detras. Sin esto, renovar temprano le cerraba la puerta.
-      const deHoy = await this.prisma.membership.findFirst({
+      const deHoy = await tx.membership.findFirst({
         where: { memberId: socio.id, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
         orderBy: { fechaFin: 'desc' },
       });
       if (!deHoy) {
-        return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia);
+        return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia, tx);
       }
-      const checkIn = await this.prisma.checkIn.create({
+      const checkIn = await tx.checkIn.create({
         data: {
           memberId: socio.id,
           membershipId: deHoy.id,
@@ -262,6 +315,7 @@ export class CheckinsService {
           metodo,
           dispositivo: dispositivo || null,
           resultado: 'permitido',
+          timestamp: new Date(),
         },
       });
       return {
@@ -272,7 +326,7 @@ export class CheckinsService {
       };
     }
 
-    const checkIn = await this.prisma.checkIn.create({
+    const checkIn = await tx.checkIn.create({
       data: {
         memberId: socio.id,
         membershipId: membresia.id,
@@ -280,6 +334,7 @@ export class CheckinsService {
         metodo,
         dispositivo: dispositivo || null,
         resultado: 'permitido',
+        timestamp: new Date(),
       },
     });
 
@@ -298,10 +353,11 @@ export class CheckinsService {
     dispositivo: string | undefined,
     motivo: string,
     membresia: any = null,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<ResultadoCheckIn> {
     let checkInId: string | null = null;
     if (socio) {
-      const registro = await this.prisma.checkIn.create({
+      const registro = await db.checkIn.create({
         data: {
           memberId: socio.id,
           membershipId: membresia?.id || null,
@@ -310,6 +366,7 @@ export class CheckinsService {
           dispositivo: dispositivo || null,
           resultado: 'denegado',
           motivo,
+          timestamp: new Date(),
         },
       });
       checkInId = registro.id;
@@ -375,14 +432,14 @@ export class CheckinsService {
    * El casillero alquilado vuelve a quedar libre en cuanto el socio sale.
    * Devuelve el numero liberado para avisarle a recepcion que pida la llave.
    */
-  private async liberarCasillero(memberId: string): Promise<number | null> {
-    const casillero = await this.prisma.locker.findUnique({ where: { memberId } });
+  private async liberarCasillero(memberId: string, tx: Prisma.TransactionClient): Promise<number | null> {
+    const casillero = await tx.locker.findUnique({ where: { memberId } });
     if (!casillero) return null;
-    await this.prisma.locker.update({
-      where: { id: casillero.id },
+    const liberado = await tx.locker.updateMany({
+      where: { id: casillero.id, memberId },
       data: { memberId: null, ocupadoDesde: null },
     });
-    return casillero.numero;
+    return liberado.count === 1 ? casillero.numero : null;
   }
 
   // ------------------------------------------------- cierre automatico diario
@@ -398,20 +455,22 @@ export class CheckinsService {
     const vencidas = dentro.filter((d) => d.desde.getTime() < limite);
     if (vencidas.length === 0) return;
 
-    await this.prisma.checkIn.createMany({
-      data: vencidas.map((d) => ({
-        memberId: d.memberId,
-        tipo: 'salida',
-        metodo: 'auto',
-        resultado: 'permitido',
-        motivo: 'Cierre automatico: no marco salida',
-      })),
-    });
-    await this.prisma.locker.updateMany({
-      where: { memberId: { in: vencidas.map((d) => d.memberId) } },
-      data: { memberId: null, ocupadoDesde: null },
-    });
-    this.log.log(`Cerradas ${vencidas.length} sesion(es) sin salida`);
+    let cerradas = 0;
+    for (const d of vencidas) {
+      const cerrada = await this.conSocioBloqueado(d.memberId, async tx => {
+        // Otra recepcion o replica del cron pudo cerrar/reabrir la sesion desde la consulta inicial.
+        const ultimo = await this.ultimoMovimiento(d.memberId, tx);
+        if (!ultimo || ultimo.tipo !== 'entrada' || ultimo.timestamp.getTime() >= limite) return false;
+        await this.liberarCasillero(d.memberId, tx);
+        await tx.checkIn.create({ data: {
+          memberId: d.memberId, tipo: 'salida', metodo: 'auto', resultado: 'permitido',
+          motivo: 'Cierre automatico: no marco salida', timestamp: new Date(),
+        } });
+        return true;
+      });
+      if (cerrada) cerradas++;
+    }
+    if (cerradas) this.log.log(`Cerradas ${cerradas} sesion(es) sin salida`);
   }
 
   // ------------------------------------ pre check-in desde el celular del socio
@@ -437,51 +496,55 @@ export class CheckinsService {
    * un toque accidental en el bolsillo no cierra la sesion.
    */
   async alternarPresencia(memberId: string, confirmarSalida = false) {
-    const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
-    if (!socio) throw new NotFoundException('Socio no encontrado');
-
-    const ultimo = await this.ultimoMovimiento(memberId);
-    if (ultimo && ultimo.tipo === 'entrada') {
-      if (!confirmarSalida) {
+    return this.conSocioBloqueado(memberId, async (tx, socio) => {
+      const ultimo = await this.ultimoMovimiento(memberId, tx);
+      if (ultimo && ultimo.tipo === 'entrada') {
+        if (!confirmarSalida) {
+          return {
+            accion: 'confirmar_salida' as const,
+            dentro: true,
+            desde: ultimo.timestamp,
+            mensaje: 'Confirma que ya te vas.',
+          };
+        }
+        const r = await this.registrarBloqueado(socio, 'portal', 'portal-socio', 'salida', tx);
+        if (r.resultado !== 'permitido') {
+          throw new BadRequestException('Acabas de entrar. Espera unos segundos para marcar la salida.');
+        }
         return {
-          accion: 'confirmar_salida' as const,
-          dentro: true,
-          desde: ultimo.timestamp,
-          mensaje: 'Confirma que ya te vas.',
+          accion: 'salida_registrada' as const,
+          dentro: false,
+          mensaje: 'Salida registrada. Nos vemos pronto.',
+          resultado: r,
         };
       }
-      const r = await this.registrar(socio, 'portal', 'portal-socio', 'salida');
-      if (r.resultado !== 'permitido') {
-        throw new BadRequestException('Acabas de entrar. Espera unos segundos para marcar la salida.');
+
+      // La repeticion de una confirmacion de salida no se convierte en un anuncio de nueva llegada.
+      if (confirmarSalida) {
+        return { accion: 'salida_registrada' as const, dentro: false, mensaje: 'La salida ya estaba registrada.' };
       }
+
+      const ahora = new Date();
+      const pendiente = await tx.preCheckIn.findFirst({
+        where: { memberId, estado: 'pendiente', expiresAt: { gt: ahora } },
+      });
+      const aviso =
+        pendiente ??
+        (await tx.preCheckIn.create({
+          data: {
+            memberId,
+            tipo: 'entrada',
+            expiresAt: new Date(ahora.getTime() + this.PRECHECK_MIN * 60 * 1000),
+          },
+        }));
+
       return {
-        accion: 'salida_registrada' as const,
+        accion: 'entrada_anunciada' as const,
         dentro: false,
-        mensaje: 'Salida registrada. Nos vemos pronto.',
-        resultado: r,
+        expira: aviso.expiresAt,
+        mensaje: 'Recepcion ya te ve en pantalla. Acercate al mostrador.',
       };
-    }
-
-    const ahora = new Date();
-    const pendiente = await this.prisma.preCheckIn.findFirst({
-      where: { memberId, estado: 'pendiente', expiresAt: { gt: ahora } },
     });
-    const aviso =
-      pendiente ??
-      (await this.prisma.preCheckIn.create({
-        data: {
-          memberId,
-          tipo: 'entrada',
-          expiresAt: new Date(ahora.getTime() + this.PRECHECK_MIN * 60 * 1000),
-        },
-      }));
-
-    return {
-      accion: 'entrada_anunciada' as const,
-      dentro: false,
-      expira: aviso.expiresAt,
-      mensaje: 'Recepcion ya te ve en pantalla. Acercate al mostrador.',
-    };
   }
 
   async llegadasPendientes() {
@@ -512,25 +575,28 @@ export class CheckinsService {
   async confirmarLlegada(preCheckInId: string, dispositivo?: string) {
     const aviso = await this.prisma.preCheckIn.findUnique({
       where: { id: preCheckInId },
-      include: { member: true },
+      select: { memberId: true },
     });
     if (!aviso) throw new NotFoundException('Aviso no encontrado');
-    if (aviso.estado !== 'pendiente') {
-      throw new BadRequestException('Ese aviso ya fue atendido o expiro');
-    }
-
-    const resultado = await this.registrar(aviso.member, 'prechequeo', dispositivo, 'entrada');
-    await this.prisma.preCheckIn.update({
-      where: { id: preCheckInId },
-      data: { estado: 'confirmado', confirmedAt: new Date(), checkInId: resultado.checkInId },
+    return this.conSocioBloqueado(aviso.memberId, async (tx, socio) => {
+      const tomado = await tx.preCheckIn.updateMany({
+        where: { id: preCheckInId, memberId: socio.id, estado: 'pendiente', expiresAt: { gt: new Date() } },
+        data: { estado: 'confirmado', confirmedAt: new Date() },
+      });
+      if (tomado.count !== 1) throw new BadRequestException('Ese aviso ya fue atendido o expiro');
+      const resultado = await this.registrarBloqueado(socio, 'prechequeo', dispositivo, 'entrada', tx);
+      await tx.preCheckIn.update({ where: { id: preCheckInId }, data: { checkInId: resultado.checkInId } });
+      return resultado;
     });
-    return resultado;
   }
 
   async descartarLlegada(preCheckInId: string) {
-    return this.prisma.preCheckIn.update({
-      where: { id: preCheckInId },
-      data: { estado: 'descartado' },
+    const aviso = await this.prisma.preCheckIn.findUnique({ where: { id: preCheckInId }, select: { memberId: true } });
+    if (!aviso) throw new NotFoundException('Aviso no encontrado');
+    return this.conSocioBloqueado(aviso.memberId, async tx => {
+      const descartado = await tx.preCheckIn.updateMany({ where: { id: preCheckInId, estado: 'pendiente' }, data: { estado: 'descartado' } });
+      if (descartado.count !== 1) throw new BadRequestException('Ese aviso ya fue atendido o expiro');
+      return tx.preCheckIn.findUnique({ where: { id: preCheckInId } });
     });
   }
 }

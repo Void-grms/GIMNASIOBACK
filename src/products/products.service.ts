@@ -1,9 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Member, Prisma, Product } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { diaLimaDe, fechaDesdeTexto, hoyLima, rangoEntre } from '../common/fechas';
 import { carpetaArchivos, guardarImagen } from '../common/archivos';
 import { join } from 'path';
+
+export const VIGENCIA_PEDIDO_MS = 12 * 3600 * 1000;
+
+type SocioVenta = Pick<Member, 'id' | 'activo' | 'dni' | 'nombres' | 'apellidos'>;
 
 type DatosComprobante = {
   tipo: string;
@@ -16,6 +21,60 @@ type DatosComprobante = {
 @Injectable()
 export class ProductsService {
   constructor(private prisma: PrismaService, private receipts: ReceiptsService) {}
+
+  /** El mismo orden de locks que presencia: socio, productos ordenados y luego casillero/pedido. */
+  async conInventarioBloqueado<T>(
+    memberId: string | undefined,
+    productIds: string[],
+    trabajo: (tx: Prisma.TransactionClient, productos: Product[], socio: SocioVenta | null) => Promise<T>,
+  ): Promise<T> {
+    const ids = [...new Set(productIds)].sort();
+    for (let intento = 0; intento < 3; intento++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          let socio: SocioVenta | null = null;
+          if (memberId) {
+            const bloqueo = await tx.member.updateMany({ where: { id: memberId }, data: { portalVersion: { increment: 0 } } });
+            if (bloqueo.count !== 1) throw new NotFoundException('Socio no encontrado');
+            socio = await tx.member.findUnique({ where: { id: memberId }, select: { id: true, activo: true, dni: true, nombres: true, apellidos: true } });
+          }
+          // UPDATE conserva el stock y toma un lock de fila entre replicas PostgreSQL.
+          // Tambien funciona con el lock de escritura de SQLite, sin SQL especifico del motor.
+          for (const id of ids) {
+            const bloqueo = await tx.product.updateMany({ where: { id }, data: { stock: { increment: 0 } } });
+            if (bloqueo.count !== 1) throw new NotFoundException('Producto no encontrado');
+          }
+          const productos = await tx.product.findMany({ where: { id: { in: ids } } });
+          return trabajo(tx, productos, socio);
+        }, { maxWait: 10000, timeout: 10000 });
+      } catch (error) {
+        if (error?.code === 'P2028') throw new ServiceUnavailableException('Hay otro cobro o pedido en curso. Intenta de nuevo en unos segundos.');
+        if (!['P2034', 'P1008'].includes(error?.code)) throw error;
+        if (intento === 2) throw new ServiceUnavailableException('Hay otro cobro o pedido en curso. Intenta de nuevo en unos segundos.');
+        await new Promise(resolve => setTimeout(resolve, 25 * (intento + 1)));
+      }
+    }
+  }
+
+  /** Los pedidos vencidos no reservan; los que estan cobrando conservan sus unidades. */
+  async apartados(db: Pick<Prisma.TransactionClient, 'orderItem'> = this.prisma, productIds?: string[], excluirPedidoId?: string) {
+    if (productIds?.length === 0) return new Map<string, number>();
+    const items = await db.orderItem.groupBy({
+      by: ['productId'],
+      where: {
+        ...(productIds ? { productId: { in: productIds } } : {}),
+        order: {
+          ...(excluirPedidoId ? { id: { not: excluirPedidoId } } : {}),
+          OR: [
+            { estado: 'pendiente', createdAt: { gte: new Date(Date.now() - VIGENCIA_PEDIDO_MS) } },
+            { estado: 'cobrando' },
+          ],
+        },
+      },
+      _sum: { cantidad: true },
+    });
+    return new Map(items.map(i => [i.productId, i._sum.cantidad || 0]));
+  }
 
   listar(incluirInactivos = false) {
     return this.prisma.product.findMany({
@@ -58,12 +117,18 @@ export class ProductsService {
 
   /** Ajuste manual de inventario: reposicion, merma o correccion de conteo. */
   async ajustarStock(id: string, cantidad: number) {
-    const producto = await this.prisma.product.findUnique({ where: { id } });
-    if (!producto) throw new NotFoundException('Producto no encontrado');
-    if (producto.esServicio) throw new BadRequestException('Un servicio no lleva inventario');
-    return this.prisma.product.update({
-      where: { id },
-      data: { stock: { increment: cantidad } },
+    if (!Number.isInteger(cantidad) || cantidad === 0 || Math.abs(cantidad) > 10000) throw new BadRequestException('Cantidad de ajuste invalida');
+    return this.conInventarioBloqueado(undefined, [id], async (tx, productos) => {
+      const producto = productos[0];
+      if (producto.esServicio) throw new BadRequestException('Un servicio no lleva inventario');
+      const apartado = cantidad < 0 ? (await this.apartados(tx, [id])).get(id) || 0 : 0;
+      if (producto.stock + cantidad < apartado) throw new BadRequestException('El ajuste dejaria menos unidades que las apartadas. Revisa los pedidos pendientes');
+      const actualizado = await tx.product.updateMany({
+        where: { id, stock: { gte: -cantidad } },
+        data: { stock: { increment: cantidad } },
+      });
+      if (actualizado.count !== 1) throw new BadRequestException('El ajuste dejaria el stock negativo');
+      return tx.product.findUnique({ where: { id } });
     });
   }
 
@@ -86,30 +151,57 @@ export class ProductsService {
       clienteNombre?: string;
       clienteDireccion?: string;
     };
-  }) {
+  }, pedidoId?: string) {
     if (!dto.items?.length) throw new BadRequestException('La venta no tiene productos');
+    const cantidades = new Map<string, number>();
+    for (const item of dto.items) {
+      if (!item.productId || !Number.isSafeInteger(item.cantidad) || item.cantidad <= 0) throw new BadRequestException('Cantidad invalida');
+      const cantidad = (cantidades.get(item.productId) || 0) + item.cantidad;
+      if (!Number.isSafeInteger(cantidad)) throw new BadRequestException('Cantidad invalida');
+      cantidades.set(item.productId, cantidad);
+    }
 
-    const venta = await this.prisma.$transaction(async (tx) => {
+    // pedidoId es un argumento interno del servicio: el DTO publico no permite excluir reservas.
+    const operacion = await this.conInventarioBloqueado(dto.memberId || undefined, [...cantidades.keys()], async (tx, productos, socio) => {
+      if (pedidoId) {
+        const pedido = await tx.order.findUnique({ where: { id: pedidoId }, include: { items: true } });
+        if (!pedido || pedido.memberId !== dto.memberId || pedido.items.length !== cantidades.size ||
+          pedido.items.some(i => cantidades.get(i.productId) !== i.cantidad)) throw new BadRequestException('El pedido no coincide con la venta');
+        const tomado = await tx.order.updateMany({
+          where: { id: pedidoId, memberId: dto.memberId, estado: 'pendiente', createdAt: { gte: new Date(Date.now() - VIGENCIA_PEDIDO_MS) } },
+          data: { estado: 'cobrando' },
+        });
+        if (tomado.count !== 1) throw new BadRequestException('Ese pedido ya fue atendido, cancelado o vencio');
+      }
+      const apartado = await this.apartados(tx, productos.filter(p => !p.esServicio).map(p => p.id), pedidoId);
+      const porId = new Map(productos.map(p => [p.id, p]));
       let total = 0;
       let casilleros = 0;
       const lineas: { productId: string; cantidad: number; precioUnitario: number }[] = [];
 
-      for (const item of dto.items) {
-        if (item.cantidad <= 0) throw new BadRequestException('Cantidad invalida');
-        const producto = await tx.product.findUnique({ where: { id: item.productId } });
+      for (const [productId, cantidad] of cantidades) {
+        const producto = porId.get(productId);
         if (!producto || !producto.activo) {
           throw new NotFoundException('Producto no encontrado o inactivo');
         }
-        if (!producto.esServicio && producto.stock < item.cantidad) {
+        const disponible = producto.stock - (apartado.get(productId) || 0);
+        if (!producto.esServicio && disponible < cantidad) {
           throw new BadRequestException(
-            `Solo quedan ${producto.stock} de "${producto.nombre}"`,
+            `Solo quedan ${Math.max(0, disponible)} disponibles de "${producto.nombre}"`,
           );
         }
-        if (producto.esCasillero) casilleros += item.cantidad;
-        total += producto.precio * item.cantidad;
+        if (!producto.esServicio) {
+          const descontado = await tx.product.updateMany({
+            where: { id: productId, activo: true, stock: { gte: cantidad } },
+            data: { stock: { decrement: cantidad } },
+          });
+          if (descontado.count !== 1) throw new BadRequestException('El stock cambio. Revisa la disponibilidad antes de cobrar');
+        }
+        if (producto.esCasillero) casilleros += cantidad;
+        total += producto.precio * cantidad;
         lineas.push({
           productId: producto.id,
-          cantidad: item.cantidad,
+          cantidad,
           precioUnitario: producto.precio,
         });
       }
@@ -150,16 +242,6 @@ export class ProductsService {
         include: { items: { include: { product: true } } },
       });
 
-      for (const linea of lineas) {
-        const producto = await tx.product.findUnique({ where: { id: linea.productId } });
-        if (producto && !producto.esServicio) {
-          await tx.product.update({
-            where: { id: linea.productId },
-            data: { stock: { decrement: linea.cantidad } },
-          });
-        }
-      }
-
       const pago = await tx.payment.create({
         data: {
           memberId: dto.memberId || null,
@@ -171,15 +253,19 @@ export class ProductsService {
         },
       });
 
-      return { ...venta, paymentId: pago.id, casillero };
+      if (pedidoId) {
+        const entregado = await tx.order.updateMany({
+          where: { id: pedidoId, estado: 'cobrando', memberId: dto.memberId },
+          data: { estado: 'entregado', saleId: venta.id, atendidoPor: dto.cajeroId || null, atendidoAt: new Date() },
+        });
+        if (entregado.count !== 1) throw new BadRequestException('El pedido cambio antes de completar el cobro');
+      }
+      return { venta: { ...venta, paymentId: pago.id, casillero }, socio };
     });
+    const { venta, socio } = operacion;
 
     // El comprobante va fuera de la transaccion: el stock y el pago ya quedaron
     // firmes, y si la emision falla se puede reintentar sin deshacer la venta.
-    const socio = dto.memberId
-      ? await this.prisma.member.findUnique({ where: { id: dto.memberId } })
-      : null;
-
     const datos: DatosComprobante = dto.comprobante ?? {
       tipo: 'boleta',
       clienteTipoDoc: socio?.dni ? 'dni' : 'sin_documento',

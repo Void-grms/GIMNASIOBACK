@@ -66,10 +66,16 @@ export class LockersService {
   async liberar(numero: number) {
     const casillero = await this.prisma.locker.findUnique({ where: { numero } });
     if (!casillero) throw new NotFoundException('Casillero no encontrado');
-    await this.prisma.locker.update({
-      where: { numero },
-      data: { memberId: null, ocupadoDesde: null },
-    });
-    return { ok: true };
+    if (!casillero.memberId) return { ok: true };
+    return this.prisma.$transaction(async (tx) => {
+      // Mismo orden que cobro y salida: socio antes que casillero.
+      await tx.member.updateMany({ where: { id: casillero.memberId }, data: { portalVersion: { increment: 0 } } });
+      const liberado = await tx.locker.updateMany({
+        where: { id: casillero.id, memberId: casillero.memberId, ocupadoDesde: casillero.ocupadoDesde },
+        data: { memberId: null, ocupadoDesde: null },
+      });
+      if (liberado.count !== 1) throw new BadRequestException('La asignacion del casillero cambio. Actualiza la grilla antes de liberarlo');
+      return { ok: true };
+    }, { maxWait: 10000, timeout: 10000 });
   }
 }

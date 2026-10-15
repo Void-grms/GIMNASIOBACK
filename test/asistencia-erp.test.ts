@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { CheckinsService } from '../src/checkins/checkins.service';
 import { QrService } from '../src/qr/qr.service';
 import { hoyLima, sumarDias } from '../src/common/fechas';
@@ -25,7 +26,15 @@ async function probar() {
     ? where.OR.some((f: any) => coincide(s, f))
     : Object.entries(where).every(([k, v]) => s[k] === v);
   const prisma: any = {
-    member: { findMany: async ({ where }: any) => socios.filter(s => coincide(s, where)) },
+    member: {
+      findMany: async ({ where }: any) => socios.filter(s => coincide(s, where)),
+      findUnique: async ({ where }: any) => socios.find(s => s.id === where.id) || null,
+      updateMany: async ({ where, data }: any) => {
+        assert.equal(data.portalVersion.increment, 0, 'El lock no revoca sesiones del portal');
+        return { count: socios.some(s => s.id === where.id) ? 1 : 0 };
+      },
+    },
+    membership: { findFirst: async ({ where }: any) => membresias.get(where.memberId) || null },
     credential: { findUnique: async () => ({ activo: true, secret: secreto, member: socios[1] }) },
     checkIn: {
       findFirst: async ({ where }: any) => movimientos.filter(m => m.memberId === where.memberId && m.resultado === 'permitido').at(-1) || null,
@@ -37,6 +46,7 @@ async function probar() {
     },
     locker: { findUnique: async () => null },
   };
+  prisma.$transaction = async (trabajo: any) => trabajo(prisma);
   const members: any = {
     membresiaVigente: async (id: string) => membresias.get(id) || null,
     resumen: (s: any, m: any, dentro: boolean) => ({ id: s.id, codigoERP: s.codigoERP, dni: s.dni, dentro }),
@@ -77,7 +87,15 @@ async function probar() {
   assert.equal((await service.escanear(codigoQr)).socio.id, 'ceros');
   const qrVencido = qr.generar('ceros', secreto, new Date(Date.now() - 180_000)).codigo;
   assert.equal((await service.escanear(qrVencido)).resultado, 'denegado');
-  console.log('Asistencia ERP: identificadores, ceros, ambigüedad, membresía, baja, QR y rebote correctos.');
+
+  let intentosTimeout = 0;
+  const saturado = new CheckinsService({ $transaction: async () => {
+    intentosTimeout++;
+    throw Object.assign(new Error('Timeout simulado de transaccion'), { code: 'P2028' });
+  } } as any, members, qr);
+  await assert.rejects(() => saturado.registrar(socios[0], 'erp'), (error: any) => error instanceof ServiceUnavailableException && error.getStatus() === 503);
+  assert.equal(intentosTimeout, 1, 'Un timeout P2028 responde 503 sin reintentar una transaccion de resultado incierto');
+  console.log('Asistencia ERP: identificadores, ceros, ambigüedad, membresía, baja, QR, rebote y timeout503 correctos.');
 }
 
 probar().catch(error => { console.error(error); process.exitCode = 1; });

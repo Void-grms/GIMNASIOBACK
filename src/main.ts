@@ -13,6 +13,7 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.enableShutdownHooks();
 
   // Detras del proxy de Railway la IP real llega en X-Forwarded-For. Sin esto
   // el limite de intentos de login se aplicaria a todos los usuarios juntos.

@@ -5,7 +5,7 @@ import { PUBLICO } from './publico.decorator';
 import { PERMITE_PIN_PENDIENTE } from './pin-pendiente.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
-export type Sesion = { sub: string; tipo: 'staff' | 'socio'; rol?: string; nombre?: string; portalVersion?: number; debeCambiarPin?: boolean };
+export type Sesion = { sub: string; tipo: 'staff' | 'socio'; rol?: string; nombre?: string; portalVersion?: number; sessionVersion?: number; debeCambiarPin?: boolean };
 
 @Injectable()
 export class JwtGuard implements CanActivate {
@@ -29,7 +29,12 @@ export class JwtGuard implements CanActivate {
     }
     const sesion: Sesion = req.sesion;
     if (!sesion.sub || !['staff', 'socio'].includes(sesion.tipo)) throw new UnauthorizedException('Sesion invalida');
-    if (sesion.tipo === 'socio') {
+    if (sesion.tipo === 'staff') {
+      const user = await this.prisma.user.findUnique({ where: { id: sesion.sub }, select: { activo: true, rol: true, sessionVersion: true } });
+      if (!user || !user.activo || user.sessionVersion !== (sesion.sessionVersion ?? 0)) throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');
+      // Los permisos vigentes mandan sobre el rol que tenia el token al emitirse.
+      req.sesion.rol = user.rol;
+    } else {
       const socio = await this.prisma.member.findUnique({ where: { id: sesion.sub }, select: { activo: true, dni: true, portalVersion: true, pinCambiado: true, pinTemporalHasta: true } });
       if (!socio || !socio.activo || !/^\d{8}$/.test(socio.dni || '') || socio.portalVersion !== sesion.portalVersion) {
         throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');

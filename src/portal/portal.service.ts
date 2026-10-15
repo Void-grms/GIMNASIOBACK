@@ -1,12 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
 import { IntentosService } from '../auth/intentos.service';
 import { diaLimaDe } from '../common/fechas';
 import { validarPin } from '../members/acceso.util';
+import { hashPassword, verifyPassword } from '../common/password';
 
 @Injectable()
 export class PortalService {
@@ -32,40 +32,26 @@ export class PortalService {
 
     this.intentos.verificarBloqueo(socio.bloqueadoHasta);
 
-    if (!bcrypt.compareSync(pin, socio.pinHash)) {
-      const { intentos, bloqueadoHasta } = this.intentos.siguienteBloqueo(socio.intentosFallidos);
-      await this.prisma.member.update({
-        where: { id: socio.id },
-        data: { intentosFallidos: intentos, bloqueadoHasta },
-      });
-      await this.intentos.registrar('socio', dni, false, ip);
-
-      if (bloqueadoHasta) {
-        throw new UnauthorizedException(
-          'Demasiados intentos. Espera 15 minutos o pide tu PIN en recepcion.',
-        );
-      }
-      throw new UnauthorizedException(
-        `${generico}. Te quedan ${this.intentos.intentosRestantes(socio.intentosFallidos)} intento(s).`,
-      );
-    }
-
     if (!socio.pinCambiado && (!socio.pinTemporalHasta || socio.pinTemporalHasta.getTime() <= Date.now())) {
       throw new UnauthorizedException('El acceso temporal no esta vigente. Solicita un PIN o enlace en recepcion');
     }
 
-    await this.prisma.member.update({
-      where: { id: socio.id },
-      data: { intentosFallidos: 0, bloqueadoHasta: null },
-    });
-    await this.intentos.registrar('socio', dni, true, ip);
+    const coincide = await verifyPassword(pin, socio.pinHash);
+    const confirmado = await this.intentos.confirmar('socio', {
+      id: socio.id, hash: socio.pinHash, version: socio.portalVersion, identificador: dni,
+    }, coincide, ip);
+    if (!confirmado.permitido) {
+      this.intentos.verificarBloqueo(confirmado.registro?.bloqueadoHasta);
+      throw new UnauthorizedException(generico);
+    }
 
     // La sesion dura poco mientras el PIN siga siendo el que entrego recepcion.
-    const token = await this.tokenSesion(socio);
+    const vigente = confirmado.registro;
+    const token = await this.tokenSesion(vigente);
     return {
       access_token: token,
-      debeCambiarPin: !socio.pinCambiado,
-      socio: socio.pinCambiado ? this.members.resumen(socio, null) : this.perfilMinimo(socio),
+      debeCambiarPin: !vigente.pinCambiado,
+      socio: vigente.pinCambiado ? this.members.resumen({ ...vigente, consents: socio.consents }, null) : this.perfilMinimo(vigente),
     };
   }
 
@@ -101,9 +87,9 @@ export class PortalService {
     });
     if (!socio) throw new NotFoundException('Socio no encontrado');
 
-    const membresia = await this.members.membresiaVigente(memberId);
-    const dentro = await this.members.estaDentro(memberId);
-    const casillero = await this.prisma.locker.findUnique({ where: { memberId } });
+    const [membresia, dentro, casillero] = await Promise.all([
+      this.members.membresiaVigente(memberId), this.members.estaDentro(memberId), this.prisma.locker.findUnique({ where: { memberId } }),
+    ]);
     return {
       ...this.members.resumen(socio, membresia, dentro),
       email: socio.email,
@@ -154,8 +140,8 @@ export class PortalService {
   async actualizarPerfil(
     memberId: string,
     dto: {
-      telefono?: string;
-      email?: string;
+      telefono?: string | null;
+      email?: string | null;
       pinActual?: string;
       pinNuevo?: string;
       ocultarEnRanking?: boolean;
@@ -171,19 +157,19 @@ export class PortalService {
     }
 
     const data: Record<string, any> = {};
-    if (dto.telefono !== undefined) data.telefono = dto.telefono.trim() || null;
-    if (dto.email !== undefined) data.email = dto.email.trim().toLowerCase() || null;
+    if (dto.telefono !== undefined) data.telefono = (dto.telefono || '').trim() || null;
+    if (dto.email !== undefined) data.email = (dto.email || '').trim().toLowerCase() || null;
     if (dto.ocultarEnRanking !== undefined) data.ocultarEnRanking = dto.ocultarEnRanking;
 
     if (dto.pinNuevo) {
       const nuevo = validarPin(dto.pinNuevo, socio.dni, socio.codigoERP);
-      if (!dto.pinActual || !bcrypt.compareSync(dto.pinActual, socio.pinHash)) {
+      if (!dto.pinActual || !await verifyPassword(dto.pinActual, socio.pinHash)) {
         throw new BadRequestException('El PIN actual no coincide');
       }
       if (nuevo === dto.pinActual) {
         throw new BadRequestException('El PIN nuevo tiene que ser distinto del actual');
       }
-      data.pinHash = bcrypt.hashSync(nuevo, 10);
+      data.pinHash = await hashPassword(nuevo);
       data.pinCambiado = true;
       data.pinTemporalHasta = null;
       data.portalVersion = { increment: 1 };
@@ -192,7 +178,10 @@ export class PortalService {
     }
 
     const actualizado = await this.prisma.$transaction(async (tx) => {
-      const resultado = await tx.member.updateMany({ where: { id: memberId, activo: true, portalVersion: socio.portalVersion }, data });
+      const resultado = await tx.member.updateMany({ where: {
+        id: memberId, activo: true, portalVersion: socio.portalVersion, pinHash: socio.pinHash,
+        ...(socio.pinCambiado ? {} : { pinCambiado: false, pinTemporalHasta: { gt: new Date() } }),
+      }, data });
       if (resultado.count !== 1) throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');
       if (dto.pinNuevo || (dto.telefono !== undefined && data.telefono !== socio.telefono)) {
         await tx.portalActivation.updateMany({ where: { memberId, usedAt: null }, data: { usedAt: new Date() } });
