@@ -111,6 +111,8 @@ async function main() {
   await denegado(() => acceso.emitirPin(importado.id, { identidadVerificada: true, consentimiento: true, consentimientoVersion: 'texto-anterior' }));
   assert.ok(await prisma.consent.count({ where: { memberId: importado.id } }) === 0, 'Las denegaciones no fabrican consentimientos');
   const invitacionPendiente = await acceso.emitirActivacion(importado.id, { identidadVerificada: true });
+  assert.ok(invitacionPendiente.enlaceBienvenida === 'http://localhost:3000/portal/bienvenida' && !invitacionPendiente.enlaceBienvenida.includes('#'), 'Bienvenida publica separada del enlace privado');
+  assert.ok(invitacionPendiente.mensaje.includes('DNI') && invitacionPendiente.mensaje.includes('PIN personal') && invitacionPendiente.mensaje.includes('recepcion'), 'Mensaje explica cambio, acceso y continuidad de asistencia');
   assert.ok(await prisma.consent.count({ where: { memberId: importado.id } }) === 0, 'Emitir invitacion pendiente no fabrica consentimiento');
   const original = await prisma.member.findUniqueOrThrow({ where: { id: importado.id } });
   assert.ok(bcrypt.compareSync('5926', original.pinHash) && !original.pinCambiado, 'Invitar conserva PIN hasta consumo');
@@ -185,7 +187,8 @@ async function main() {
   assert.ok(await prisma.consent.count({ where: { memberId: pinConsentido.id, origen: 'recepcion_acceso', version: consentimientoVersion } }) === 1, 'PIN de recepcion registra consentimiento expreso versionado');
   await prisma.member.update({ where: { id: pinConsentido.id }, data: { activo: false } });
   await denegado(() => acceso.emitirPin(pinConsentido.id, { identidadVerificada: true }));
-  const staff = await jwt.signAsync({ sub: 'staff-local', tipo: 'staff' });
+  const staffLocal = await prisma.user.create({ data: { email: 'staff-prueba@example.invalid', nombre: 'Staff local', passwordHash: bcrypt.hashSync('clave-ficticia-local', 10), rol: 'recepcion' } });
+  const staff = await jwt.signAsync({ sub: staffLocal.id, tipo: 'staff' });
   assert.ok(await guard.canActivate(contexto(staff, 'miQr')), 'Guard conserva autenticacion staff');
   assert.ok(members.resumen(creado, { estado: 'vencida', fechaFin: new Date(Date.now() + 100000000) }).estado === 'vencido', 'Estado vencido ERP prevalece sobre fecha futura');
   grupos++;

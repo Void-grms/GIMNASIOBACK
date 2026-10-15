@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Ip, Post, UseGuards } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { LoginRateGuard } from '../common/login-rate.guard';
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { Publico } from './publico.decorator';
@@ -13,6 +14,7 @@ class LoginDto {
 
   @IsString()
   @MinLength(4, { message: 'La contrasena es muy corta' })
+  @MaxLength(1024)
   password: string;
 }
 
@@ -31,9 +33,9 @@ class CambiarClaveDto {
 export class AuthController {
   constructor(private auth: AuthService) {}
 
-  /** 10 intentos por minuto y por IP, antes incluso de tocar la base. */
+  /** Limite por identidad compartido entre replicas; IP con margen para el local. */
   @Publico()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(LoginRateGuard)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
   login(@Body() dto: LoginDto, @Ip() ip: string) {
@@ -41,11 +43,11 @@ export class AuthController {
   }
 
   /** Cada persona del staff cambia su propia contrasena (la inicial es temporal). */
-  @UseGuards(SoloStaffGuard, ThrottlerGuard)
+  @UseGuards(SoloStaffGuard, LoginRateGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('password')
   cambiarClave(@SesionActual() sesion: Sesion, @Body() dto: CambiarClaveDto) {
-    return this.auth.cambiarClave(sesion.sub, dto.actual, dto.nueva);
+    return this.auth.cambiarClave(sesion.sub, dto.actual, dto.nueva, sesion.sessionVersion ?? 0);
   }
 
   @Get('me')

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import * as bcrypt from 'bcryptjs';
+import { hashPassword } from '../common/password';
 import { PrismaService } from '../prisma/prisma.service';
 import { QrService } from '../qr/qr.service';
 import { SettingsService } from '../settings/settings.service';
@@ -71,7 +71,7 @@ export class MembersService {
         direccion: dto.direccion?.trim() || null,
         esUniversitario: !!dto.esUniversitario,
         notas: dto.notas || null,
-        pinHash: bcrypt.hashSync(pin, 10),
+        pinHash: await hashPassword(pin),
         pinCambiado: false,
         pinTemporalHasta,
         credential: { create: { tipo: 'qr', secret: this.qr.nuevoSecreto() } },
@@ -139,7 +139,7 @@ export class MembersService {
     }
     const revocar = ['dni', 'telefono', 'codigoERP', 'activo'].some((campo) => data[campo] !== undefined && data[campo] !== previo[campo]);
     if (revocar) data.portalVersion = { increment: 1 };
-    if (data.activo === false) Object.assign(data, { pinHash: bcrypt.hashSync(pinAleatorio(), 10), pinCambiado: false, pinTemporalHasta: null });
+    if (data.activo === false) Object.assign(data, { pinHash: await hashPassword(pinAleatorio()), pinCambiado: false, pinTemporalHasta: null });
     const socio = await this.prisma.$transaction(async (tx) => {
       const actualizado = await tx.member.update({ where: { id }, data, include: { consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1 } } });
       if (revocar) await tx.portalActivation.updateMany({ where: { memberId: id, usedAt: null }, data: { usedAt: new Date() } });
@@ -332,6 +332,7 @@ export class MembersService {
 
     // Lo que el socio anoto de si mismo se va con el; los pagos y comprobantes
     // se quedan porque los exige la norma tributaria.
+    const pinHashAnonimo = await hashPassword(pinAleatorio());
     const actualizado = await this.prisma.$transaction(async (tx) => {
       await tx.credential.deleteMany({ where: { memberId } });
       await tx.bodyLog.deleteMany({ where: { memberId } });
@@ -342,7 +343,7 @@ export class MembersService {
         codigoERP: null,
         documentoERP: null,
         portalVersion: { increment: 1 },
-        pinHash: bcrypt.hashSync(pinAleatorio(), 10),
+        pinHash: pinHashAnonimo,
         pinCambiado: false,
         pinTemporalHasta: null,
         nombres: 'Socio',

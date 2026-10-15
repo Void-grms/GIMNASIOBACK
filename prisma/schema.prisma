@@ -16,6 +16,8 @@ model User {
   id               String    @id @default(cuid())
   email            String    @unique
   passwordHash     String
+  /// Revoca las sesiones del personal al cambiar la contrasena.
+  sessionVersion   Int       @default(0)
   nombre           String
   rol              String    @default("recepcion") // admin | recepcion
   activo           Boolean   @default(true)
@@ -161,6 +163,7 @@ model Payment {
   receipt    Receipt?
 
   @@index([fecha])
+  @@index([memberId, fecha])
 }
 
 /// Evento de ingreso. Se registran tambien los intentos denegados.
@@ -212,6 +215,7 @@ model PreCheckIn {
   member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@index([estado, expiresAt])
+  @@index([memberId, estado, expiresAt])
 }
 
 /// Producto de mostrador: agua, suplementos, alquiler de casillero.
@@ -267,6 +271,9 @@ model OrderItem {
 
   order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId, orderId])
 }
 
 /// Venta de mostrador. Puede ir a nombre de un socio o de un visitante.
@@ -530,6 +537,16 @@ model LoginAttempt {
   createdAt     DateTime @default(now())
 
   @@index([identificador, createdAt])
+}
+
+/// Contadores compartidos entre instancias; la clave es una huella SHA-256.
+/// No almacena documentos, telefonos, tokens ni direcciones IP en claro.
+model RateLimitBucket {
+  key     String   @id
+  hits    Int      @default(1)
+  resetAt DateTime
+
+  @@index([resetAt])
 }
 
 /// Pase de invitado. Cada socio puede traer a alguien gratis dentro de su cupo

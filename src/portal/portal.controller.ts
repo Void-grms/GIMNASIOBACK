@@ -1,7 +1,8 @@
 import {
   Body, Controller, Delete, ForbiddenException, Get, Ip, Param, Patch, Post, Put, Query, UseGuards,
 } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { LoginRateGuard } from '../common/login-rate.guard';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Length, Max,
@@ -130,12 +131,9 @@ export class PortalController {
     return sesion.sub;
   }
 
-  /**
-   * Cinco intentos por minuto y por IP. El usuario es el DNI, que no es
-   * secreto, asi que sin esto el PIN de cuatro digitos se adivina solo.
-   */
+  /** El limite se aplica a la identidad en todas las replicas del gimnasio. */
   @Publico()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(LoginRateGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   login(@Body() dto: LoginSocioDto, @Ip() ip: string) {
@@ -143,7 +141,7 @@ export class PortalController {
   }
 
   @Publico()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(LoginRateGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('activacion/consultar')
   consultarActivacion(@Body() dto: ConsultarActivacionDto) {
@@ -151,7 +149,7 @@ export class PortalController {
   }
 
   @Publico()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(LoginRateGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('activacion')
   activar(@Body() dto: ActivacionPortalDto, @Ip() ip: string) {
@@ -165,6 +163,8 @@ export class PortalController {
   }
 
   @PermitePinPendiente()
+  @UseGuards(LoginRateGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Patch('me')
   editarPerfil(@SesionActual() sesion: Sesion, @Body() dto: PerfilDto) {
     return this.portal.actualizarPerfil(this.soloSocio(sesion), dto, sesion.portalVersion);

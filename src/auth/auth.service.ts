@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { IntentosService } from './intentos.service';
+import { hashPassword, verifyPassword } from '../common/password';
 
 @Injectable()
 export class AuthService {
@@ -27,35 +27,24 @@ export class AuthService {
 
     this.intentos.verificarBloqueo(user.bloqueadoHasta);
 
-    if (!bcrypt.compareSync(password, user.passwordHash)) {
-      const { intentos, bloqueadoHasta } = this.intentos.siguienteBloqueo(user.intentosFallidos);
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { intentosFallidos: intentos, bloqueadoHasta },
-      });
-      await this.intentos.registrar('staff', correo, false, ip);
-
-      if (bloqueadoHasta) {
-        throw new UnauthorizedException(
-          'Demasiados intentos fallidos. La cuenta queda bloqueada 15 minutos.',
-        );
-      }
-      throw new UnauthorizedException(
-        `${generico}. Te quedan ${this.intentos.intentosRestantes(user.intentosFallidos)} intento(s).`,
-      );
+    const coincide = await verifyPassword(password, user.passwordHash);
+    const confirmado = await this.intentos.confirmar('staff', {
+      id: user.id, hash: user.passwordHash, version: user.sessionVersion, identificador: correo,
+    }, coincide, ip);
+    if (!confirmado.permitido) {
+      this.intentos.verificarBloqueo(confirmado.registro?.bloqueadoHasta);
+      throw new UnauthorizedException(generico);
     }
+    return this.sesionStaff(confirmado.registro);
+  }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { intentosFallidos: 0, bloqueadoHasta: null },
-    });
-    await this.intentos.registrar('staff', correo, true, ip);
-
+  private async sesionStaff(user: any) {
     const token = await this.jwt.signAsync({
       sub: user.id,
       tipo: 'staff',
       rol: user.rol,
       nombre: user.nombre,
+      sessionVersion: user.sessionVersion,
     });
     return {
       access_token: token,
@@ -63,19 +52,22 @@ export class AuthService {
     };
   }
 
-  async cambiarClave(userId: string, actual: string, nueva: string) {
+  async cambiarClave(userId: string, actual: string, nueva: string, version?: number) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     // 400 y no 401: un 401 haria que el panel cierre la sesion por un simple typo.
-    if (!user || !bcrypt.compareSync(actual, user.passwordHash)) {
+    if (!user || !user.activo || (version !== undefined && user.sessionVersion !== version) || !await verifyPassword(actual, user.passwordHash)) {
       throw new BadRequestException('La contrasena actual no es correcta');
     }
     if (actual === nueva) {
       throw new BadRequestException('La nueva contrasena tiene que ser distinta de la actual');
     }
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash: bcrypt.hashSync(nueva, 10), intentosFallidos: 0, bloqueadoHasta: null },
+    if (nueva.length < 8) throw new BadRequestException('La nueva contrasena debe tener al menos 8 caracteres');
+    const passwordHash = await hashPassword(nueva);
+    const actualizado = await this.prisma.user.updateMany({
+      where: { id: userId, activo: true, passwordHash: user.passwordHash, sessionVersion: user.sessionVersion },
+      data: { passwordHash, sessionVersion: { increment: 1 }, intentosFallidos: 0, bloqueadoHasta: null },
     });
-    return { ok: true };
+    if (actualizado.count !== 1) throw new UnauthorizedException('Tu acceso cambio. Vuelve a iniciar sesion');
+    return { ok: true, ...await this.sesionStaff({ ...user, sessionVersion: user.sessionVersion + 1 }) };
   }
 }

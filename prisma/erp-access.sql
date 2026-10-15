@@ -1,5 +1,25 @@
 -- Cambios aditivos del acceso ERP; conservar todos los datos existentes.
 -- statement-break
+ALTER TABLE "public"."User"
+  ADD COLUMN IF NOT EXISTS "sessionVersion" INTEGER NOT NULL DEFAULT 0;
+-- statement-break
+CREATE TABLE IF NOT EXISTS "public"."RateLimitBucket" (
+  "key" TEXT NOT NULL,
+  "hits" INTEGER NOT NULL DEFAULT 1,
+  "resetAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "RateLimitBucket_pkey" PRIMARY KEY ("key")
+);
+-- statement-break
+CREATE INDEX IF NOT EXISTS "RateLimitBucket_resetAt_idx" ON "public"."RateLimitBucket"("resetAt");
+-- statement-break
+CREATE INDEX IF NOT EXISTS "Payment_memberId_fecha_idx" ON "public"."Payment"("memberId", "fecha");
+-- statement-break
+CREATE INDEX IF NOT EXISTS "PreCheckIn_memberId_estado_expiresAt_idx" ON "public"."PreCheckIn"("memberId", "estado", "expiresAt");
+-- statement-break
+CREATE INDEX IF NOT EXISTS "OrderItem_orderId_idx" ON "public"."OrderItem"("orderId");
+-- statement-break
+CREATE INDEX IF NOT EXISTS "OrderItem_productId_orderId_idx" ON "public"."OrderItem"("productId", "orderId");
+-- statement-break
 ALTER TABLE "public"."Member"
   ADD COLUMN IF NOT EXISTS "codigoERP" TEXT,
   ADD COLUMN IF NOT EXISTS "documentoERP" TEXT,

@@ -13,6 +13,9 @@
     "test:logica": "ts-node test/logica.test.ts",
     "test:asistencia-erp": "ts-node test/asistencia-erp.test.ts",
     "test:acceso": "ts-node test/acceso.test.ts",
+    "test:auth-concurrencia": "ts-node test/auth-concurrencia.test.ts",
+    "test:checkins-concurrencia": "ts-node test/checkins-concurrencia.test.ts",
+    "test:carga": "node scripts/probar-carga.cjs",
     "test:importacion": "ts-node test/importacion.test.ts",
     "importar:erp": "ts-node scripts/importar-erp.ts",
     "db:elegir": "node scripts/elegir-base.js",
@@ -32,6 +35,7 @@
     "@nestjs/schedule": "^4.1.2",
     "@nestjs/throttler": "^6.3.0",
     "@prisma/client": "^5.22.0",
+    "bcrypt": "6.0.0",
     "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
@@ -45,6 +49,7 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^10.2.3",
+    "@types/bcrypt": "^6.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
@@ -55,5 +60,12 @@
   },
   "engines": {
     "node": "22.x"
+  },
+  "overrides": {
+    "body-parser": "1.20.6",
+    "multer": "2.4.0",
+    "qs": "6.16.1",
+    "lodash": "4.18.1",
+    "uuid@11.0.3": "11.1.1"
   }
 }
