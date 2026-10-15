@@ -94,7 +94,7 @@ const { codigo } = qr.generar(memberId, secreto, ahora);
 ok('el codigo valida contra el secreto del socio', qr.validar(codigo, secreto, ahora));
 ok('recepcion puede leer de que socio es', qr.leerMemberId(codigo) === memberId);
 ok('con otro secreto no valida', !qr.validar(codigo, qr.nuevoSecreto(), ahora));
-ok('un codigo alterado no valida', !qr.validar(codigo.slice(0, -1) + 'X', secreto, ahora));
+ok('un codigo alterado no valida', !qr.validar(codigo.slice(0, -1) + (codigo.endsWith('X') ? 'Y' : 'X'), secreto, ahora));
 ok('tolera 30 segundos de desfase de reloj', qr.validar(codigo, secreto, new Date(ahora.getTime() + 30_000)));
 ok(
   'una captura de pantalla de hace 3 minutos ya no sirve',

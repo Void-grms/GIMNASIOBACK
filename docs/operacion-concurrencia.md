@@ -58,7 +58,7 @@ checkins y pedidos exportan funciones para recibir clientes de una base aislada.
 Prueba del 15/10/2026: 200 inicios simultaneos desde una misma IP y 3.000 consultas
 de perfil, QR y presencia, repartidas entre dos procesos; cero errores. Dataset
 ficticio de 2.200 socios, 7.040 contratos, 6.000 asistencias y 2.000 pagos. p95 de
-login 2.737 ms y de consultas 2.428 ms en la maquina local de prueba. Se verifico
+login 2.600 ms y de consultas 1.688 ms en la maquina local de prueba. Se verifico
 ademas el limite compartido entre instancias, ocho carreras de autenticacion,
 catorce escenarios de presencia y once grupos de inventario/pedidos (200
 solicitudes concurrentes). Los rechazos de stock esperado son errores de negocio.
@@ -80,3 +80,29 @@ primero almacenamiento compartido/objetos para las fotos y comprobantes privados
 No aumentar replicas mientras esos archivos dependan del volumen de una sola.
 Presupuestar conexiones: replicas por DB_POOL_SIZE mas administracion y respaldos
 debe quedar por debajo del max_connections real de PostgreSQL.
+
+## Auditoria de dependencias de produccion
+
+Revision del 15/10/2026 con `npm audit --omit=dev`: de 12 avisos por paquete
+(3 altos, 8 moderados y 1 bajo) a 7 moderados, sin altos ni criticos. El conteo
+incluye paquetes que heredan el mismo aviso; no representa siete fallos
+independientes alcanzables desde la API. No se uso `npm audit fix --force` ni
+se cambio la version mayor de Nest.
+
+El lockfile fija overrides compatibles con las versiones mayores existentes:
+`lodash 4.18.1`, `qs 6.16.1`, `body-parser 1.20.6`, `multer 2.4.0` y
+`uuid 11.1.1` exclusivamente donde antes se resolvia `uuid 11.0.3` de
+`@nestjs/schedule`. Se conserva `uuid 8.3.2` de ExcelJS.
+
+| Aviso pendiente | Alcance revisado en este repositorio |
+| --- | --- |
+| Nest core 10.4.22: [inyeccion en SseStream](https://github.com/advisories/GHSA-36xv-jgw5-4q75), heredada tambien por platform-express y schedule | Requiere mapear datos controlados por terceros a `type` o `id` de SSE. No hay rutas `@Sse`, `SseStream` ni `EventSource`. |
+| file-type 20.4.1, heredado por Nest common: [ASF](https://github.com/advisories/GHSA-5v7r-6r5c-r473) y [descompresion ZIP](https://github.com/advisories/GHSA-j47w-4g3g-c36v) | No se usa `FileTypeValidator` ni el detector file-type. Las fotos se reciben como JSON/base64; no existen interceptores de archivos ni rutas multipart de Multer. |
+| ExcelJS 4.4.0 / uuid 8.3.2: [limites de buffer en v3/v5/v6](https://github.com/advisories/GHSA-w5hq-g745-h8pq) | ExcelJS solo llama `v4()` sin buffer en el codigo que genera identificadores de formato condicional. No usa las funciones y argumentos afectados. |
+
+Estos avisos permanecen registrados; la aplicacion no se declara libre de
+vulnerabilidades. Revisar estas condiciones antes de introducir SSE,
+validacion binaria de archivos o nuevos usos de UUID. Actualizar las versiones
+mayores pendientes requiere una migracion y regresion aparte. La auditoria
+completa, incluyendo herramientas de desarrollo, aun informa 22 avisos
+(8 altos, 11 moderados y 3 bajos) en esta revision.
