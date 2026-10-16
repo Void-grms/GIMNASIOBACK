@@ -11,4 +11,5 @@ dist/
 uploads/
 backups/
 reports/
+billing-engine/vendor/
 *.xlsx

@@ -184,15 +184,15 @@ export class ReceiptsService {
   }
 
   /**
-   * Un comprobante emitido no se borra ni se edita: se anula dejando rastro.
-   * Ante SUNAT esto corresponde a una comunicacion de baja o nota de credito,
-   * que emite el PSE cuando este conectado.
+   * Anulacion local de recibos internos. Una baja o nota fiscal exige un flujo
+   * independiente y no puede simularse cambiando este indicador.
    */
   async anular(id: string, motivo: string) {
     if (!motivo?.trim()) throw new BadRequestException('Anular exige un motivo');
     const comprobante = await this.prisma.receipt.findUnique({ where: { id } });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
     if (comprobante.anulado) throw new BadRequestException('Ese comprobante ya estaba anulado');
+    if (comprobante.estadoSunat !== 'no_aplica') throw new BadRequestException('Un documento enviado a emision electronica necesita baja o nota de credito fiscal. No se puede anular solamente en el sistema.');
 
     return this.prisma.receipt.update({
       where: { id },
@@ -229,7 +229,7 @@ export class ReceiptsService {
    */
   pendientes() {
     return this.prisma.receipt.findMany({
-      where: { estadoSunat: { in: ['pendiente', 'rechazado'] }, anulado: false },
+      where: { estadoSunat: 'pendiente', anulado: false },
       orderBy: { emitidoAt: 'asc' },
       include: { items: true },
     });

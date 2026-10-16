@@ -10,10 +10,9 @@ export type RespuestaPse = {
 /**
  * Adaptador de emision electronica.
  *
- * El gimnasio no firma XML ni habla con SUNAT directamente: eso lo hace un PSE.
- * Aqui vive la forma del pedido; conectar NubeFacT es poner el token en los
- * ajustes. Mientras `pseProveedor` sea "ninguno", el comprobante se emite y se
- * guarda igual, con estado "no_aplica".
+ * Adaptador legado del proveedor externo, independiente del laboratorio BETA.
+ * Mientras `pseProveedor` sea "ninguno", solo se guarda un recibo interno,
+ * sin valor tributario y con estado "no_aplica".
  */
 @Injectable()
 export class PseService {
@@ -79,6 +78,8 @@ export class PseService {
           Authorization: `Token token="${ajustes.pseToken}"`,
         },
         body: JSON.stringify(cuerpo),
+        signal: AbortSignal.timeout(15000),
+        redirect: 'error',
       });
       const data: any = await res.json().catch(() => ({}));
 
