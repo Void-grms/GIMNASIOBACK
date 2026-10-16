@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MembershipsService } from '../memberships/memberships.service';
 import { MembersService } from '../members/members.service';
 import { carpetaPrivada, guardarImagen } from '../common/archivos';
+import { comprobarOferta, congelarPlan, condicionesGuardadas, versionOferta } from '../plans/condiciones';
 
 /**
  * Renovacion desde el portal: el socio elige plan, paga por Yape y sube la
@@ -39,6 +40,9 @@ export class RenewalsService {
           nombre: p.nombre,
           precio: p.precio,
           duracionDias: p.duracionDias,
+          limiteAsistencias: p.limiteAsistencias,
+          esPromocion: p.esPromocion,
+          versionOferta: versionOferta(p),
           descripcion: p.descripcion,
         })),
     };
@@ -46,7 +50,7 @@ export class RenewalsService {
 
   async solicitar(
     memberId: string,
-    dto: { planId: string; imagen: string; operacion?: string; aceptaTerminos: boolean },
+    dto: { planId: string; imagen: string; operacion?: string; aceptaTerminos: boolean; versionOferta?: string },
     ip?: string,
   ) {
     if (!dto.aceptaTerminos) {
@@ -56,33 +60,24 @@ export class RenewalsService {
     if (!ajustes?.yapeNumero) {
       throw new BadRequestException('El gimnasio aun no activo el pago por Yape. Renueva en recepcion.');
     }
-    const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
-    if (!socio || !socio.activo) throw new BadRequestException('Tu cuenta no esta activa');
-
-    const plan = await this.prisma.plan.findUnique({ where: { id: dto.planId } });
-    if (!plan || !plan.activo || plan.duracionDias <= 1) {
-      throw new BadRequestException('Ese plan no se puede renovar desde el portal');
-    }
-    if (plan.requiereEvidencia && !socio.esUniversitario) {
-      throw new BadRequestException('Ese plan exige carne universitario: acercate a recepcion.');
-    }
-
-    const abierta = await this.prisma.renewalRequest.findFirst({
-      where: { memberId, estado: { in: ['pendiente', 'revisando'] } },
-    });
-    if (abierta) {
-      throw new BadRequestException('Ya tienes una renovacion en revision. Te avisamos al aprobarla.');
-    }
-
-    const solicitud = await this.prisma.renewalRequest.create({
-      data: {
-        memberId,
-        planId: plan.id,
-        monto: plan.precio,
-        operacion: dto.operacion?.trim() || null,
-        comprobante: 'pendiente',
-      },
-    });
+    const solicitud = await this.prisma.$transaction(async tx => {
+      const tomada = await tx.member.updateMany({ where: { id: memberId }, data: { portalVersion: { increment: 0 } } });
+      if (!tomada.count) throw new BadRequestException('Tu cuenta no esta activa');
+      const socio = await tx.member.findUnique({ where: { id: memberId } });
+      if (!socio.activo) throw new BadRequestException('Tu cuenta no esta activa');
+      const planTomado = await tx.plan.updateMany({ where: { id: dto.planId }, data: { orden: { increment: 0 } } });
+      if (!planTomado.count) throw new BadRequestException('Ese plan no se puede renovar desde el portal');
+      const plan = await tx.plan.findUnique({ where: { id: dto.planId } });
+      comprobarOferta(plan, dto.versionOferta);
+      if (!plan.activo || plan.duracionDias <= 1) throw new BadRequestException('Ese plan no se puede renovar desde el portal');
+      if (plan.requiereEvidencia && !socio.esUniversitario) throw new BadRequestException('Ese plan exige carne universitario: acercate a recepcion.');
+      const abierta = await tx.renewalRequest.findFirst({ where: { memberId, estado: { in: ['pendiente', 'revisando'] } } });
+      if (abierta) throw new BadRequestException('Ya tienes una renovacion en revision. Te avisamos al aprobarla.');
+      return tx.renewalRequest.create({ data: {
+        memberId, planId: plan.id, monto: plan.precio, ...congelarPlan(plan),
+        operacion: dto.operacion?.trim() || null, comprobante: 'pendiente',
+      } });
+    }, { maxWait: 10000, timeout: 10000 });
     try {
       const ext = guardarImagen(dto.imagen, join(carpetaPrivada(), 'yape'), solicitud.id, 3 * 1024 * 1024);
       await this.prisma.renewalRequest.update({
@@ -108,7 +103,9 @@ export class RenewalsService {
     return {
       id: ultima.id,
       estado: ultima.estado === 'revisando' ? 'pendiente' : ultima.estado,
-      plan: ultima.plan.nombre,
+      plan: ultima.planNombre ?? ultima.plan.nombre,
+      limiteAsistencias: ultima.limiteAsistencias,
+      duracionDias: ultima.duracionDiasContratada ?? ultima.plan.duracionDias,
       monto: ultima.monto,
       motivoRechazo: ultima.motivoRechazo,
       creado: ultima.createdAt,
@@ -129,7 +126,9 @@ export class RenewalsService {
       creado: r.createdAt,
       monto: r.monto,
       operacion: r.operacion,
-      plan: r.plan.nombre,
+      plan: r.planNombre ?? r.plan.nombre,
+      limiteAsistencias: r.limiteAsistencias,
+      duracionDias: r.duracionDiasContratada ?? r.plan.duracionDias,
       socio: {
         id: r.member.id,
         nombreCompleto: `${r.member.nombres} ${r.member.apellidos}`,
@@ -167,6 +166,7 @@ export class RenewalsService {
         planId: r.planId,
         metodo: r.metodo,
         monto: r.monto,
+        condicionesAceptadas: condicionesGuardadas(r),
         aceptaTerminos: true,
         cajeroId,
         observacion: `Renovacion desde el portal${r.operacion ? `, Yape op. ${r.operacion}` : ''}`,

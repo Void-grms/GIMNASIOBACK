@@ -168,10 +168,19 @@ async function main() {
     },
   ];
 
-  for (const plan of planes) {
-    const existe = await prisma.plan.findFirst({ where: { nombre: plan.nombre } });
-    if (!existe) await prisma.plan.create({ data: plan });
+  // El catalogo inicial se crea solo en una base nueva: cambios del administrador
+  // (incluido renombrar) no deben reaparecer como planes duplicados en otro deploy.
+  if (await prisma.plan.count() === 0) {
+    for (const plan of planes) await prisma.plan.create({ data: plan });
   }
+
+  // ID estable: renombrar, editar o desactivar este plan nunca lo recrea.
+  // Un plan preexistente con este nombre conserva sus condiciones originales.
+  const interdiaria = await prisma.plan.findFirst({ where: { OR: [{ id: 'plan_interdiaria' }, { nombre: 'Interdiaria' }] } });
+  if (!interdiaria) await prisma.plan.create({ data: {
+    id: 'plan_interdiaria', nombre: 'Interdiaria', precio: 60, duracionDias: 30,
+    limiteAsistencias: 12, orden: 3, descripcion: '12 dias de asistencia durante 30 dias desde el inicio. Los reingresos del mismo dia no consumen otra asistencia.',
+  } });
 
   const mensual = await prisma.plan.findFirst({ where: { nombre: 'Mensual' } });
   const universitario = await prisma.plan.findFirst({ where: { nombre: 'Universitario' } });
@@ -183,6 +192,7 @@ async function main() {
   ];
 
   for (const e of CON_EJEMPLOS ? ejemplos : []) {
+    if (!e.plan) continue;
     if (await prisma.member.findUnique({ where: { dni: e.dni } })) continue;
 
     const socio = await prisma.member.create({

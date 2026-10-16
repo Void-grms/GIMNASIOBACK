@@ -15,6 +15,7 @@
     "test:acceso": "ts-node test/acceso.test.ts",
     "test:auth-concurrencia": "ts-node test/auth-concurrencia.test.ts",
     "test:checkins-concurrencia": "ts-node test/checkins-concurrencia.test.ts",
+    "test:membresias": "ts-node test/membresias.test.ts",
     "test:carga": "node scripts/probar-carga.cjs",
     "test:importacion": "ts-node test/importacion.test.ts",
     "importar:erp": "ts-node scripts/importar-erp.ts",

@@ -106,6 +106,9 @@ model Plan {
   nombre            String
   precio            Float
   duracionDias      Int
+  /// Nulo = sin limite. Una asistencia equivale a un dia de ingreso en Lima.
+  limiteAsistencias Int?
+  esPromocion       Boolean  @default(false)
   /// true cuando el plan exige evidencia (p. ej. carne universitario vigente)
   requiereEvidencia Boolean  @default(false)
   descripcion       String?
@@ -129,6 +132,13 @@ model Membership {
   /// Ultimo dia valido inclusive: inicio + (duracionDias - 1)
   fechaFin     DateTime
   precioPagado Float
+  /// Condiciones congeladas al vender; null conserva los contratos anteriores.
+  planNombre                String?
+  planDescripcion           String?
+  duracionDiasContratada    Int?
+  requiereEvidenciaContratada Boolean?
+  limiteAsistencias         Int?
+  asistenciasUsadas         Int @default(0)
   estado       String   @default("activa") // activa | vencida | anulada
   observacion  String?
   createdAt    DateTime @default(now())
@@ -184,6 +194,7 @@ model CheckIn {
 
   @@index([timestamp])
   @@index([memberId, timestamp])
+  @@index([membershipId, resultado, tipo, timestamp])
 }
 
 /// Secreto por socio para generar su QR rotativo. Revocable sin tocar al socio.
@@ -718,6 +729,12 @@ model RenewalRequest {
   memberId      String
   planId        String
   monto         Float
+  /// Oferta aceptada al enviar el pago: editar el catalogo no la cambia.
+  planNombre                String?
+  planDescripcion           String?
+  duracionDiasContratada    Int?
+  requiereEvidenciaContratada Boolean?
+  limiteAsistencias         Int?
   metodo        String    @default("yape")
   /// Numero de operacion que muestra Yape (opcional, ayuda a conciliar)
   operacion     String?
