@@ -1,0 +1,13 @@
+{
+  "name": "forcesgym/sunat-test-engine",
+  "description": "Motor privado de XML y firma para ensayos SUNAT; sin transporte HTTP ni SOAP",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.4",
+    "ext-dom": "*",
+    "ext-openssl": "*",
+    "greenter/xml": "5.3.0",
+    "greenter/xmldsig": "^5.0"
+  },
+  "config": { "allow-plugins": false, "sort-packages": true, "platform": { "php": "8.4.0" } }
+}

@@ -21,6 +21,7 @@ import { GuestsModule } from './guests/guests.module';
 import { TrainingModule } from './training/training.module';
 import { RenewalsModule } from './renewals/renewals.module';
 import { MessagesModule } from './messages/messages.module';
+import { SunatModule } from './sunat/sunat.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { MessagesModule } from './messages/messages.module';
     TrainingModule,
     RenewalsModule,
     MessagesModule,
+    SunatModule,
   ],
 })
 export class AppModule {}

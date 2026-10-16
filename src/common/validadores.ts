@@ -29,7 +29,7 @@ export function esRuc(valor: string): boolean {
   const pesos = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
   const suma = pesos.reduce((acc, peso, i) => acc + Number(ruc[i]) * peso, 0);
   const resto = suma % 11;
-  const esperado = resto === 0 ? 0 : resto === 1 ? 1 : 11 - resto;
+  const esperado = (11 - resto) % 10;
   return esperado === Number(ruc[10]);
 }
 

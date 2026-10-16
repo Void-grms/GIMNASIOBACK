@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MENSAJE_NUEVO, MENSAJE_RENOVACION } from '../messages/plantillas';
 import { createHash } from 'crypto';
+import { cifrar, descifrar } from '../sunat/crypto';
 
 /** Regimenes que si trasladan IGV. El NRUS paga cuota fija y no lo desglosa. */
 const REGIMENES_CON_IGV = ['rer', 'rmt', 'general'];
@@ -19,6 +20,7 @@ export class SettingsService {
     });
     return {
       ...ajustes,
+      pseToken: ajustes.pseToken?.startsWith('v1:') ? descifrar(ajustes.pseToken, 'pse-token') : ajustes.pseToken,
       consentimientoHuella: createHash('sha256').update(ajustes.consentimientoTexto).digest('hex'),
     };
   }
@@ -36,9 +38,18 @@ export class SettingsService {
     ];
     const data: Record<string, any> = {};
     for (const campo of campos) if (dto[campo] !== undefined) data[campo] = dto[campo];
+    // Un campo de clave vacio conserva la existente; nunca se devuelve al navegador.
+    if (dto.pseToken === '') delete data.pseToken;
+    else if (dto.pseToken) data.pseToken = cifrar(dto.pseToken, 'pse-token');
 
     await this.obtener();
-    return this.prisma.settings.update({ where: { id: 'default' }, data });
+    await this.prisma.settings.update({ where: { id: 'default' }, data });
+    return this.administrativo();
+  }
+
+  async administrativo() {
+    const { pseToken, ...datos } = await this.obtener();
+    return { ...datos, pseTokenConfigurado: !!pseToken };
   }
 
   /** Lo que el frontend necesita saber para armar el formulario de cobro. */

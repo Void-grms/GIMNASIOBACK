@@ -11,6 +11,47 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Laboratorio SUNAT BETA: nunca comparte pagos ni correlativos tributarios.
+model SunatConfig {
+  id String @id @default("beta")
+  datos String @default("{}")
+  secretos String?
+  updatedAt DateTime @updatedAt
+}
+
+model SunatSeriePrueba {
+  id String @id @default(cuid())
+  ruc String
+  tipo String
+  numero Int @default(0)
+  @@unique([ruc, tipo])
+}
+
+model SunatPrueba {
+  id String @id @default(cuid())
+  idempotencyKey String @unique
+  entorno String @default("beta")
+  ruc String
+  tipo String
+  serie String
+  numero Int
+  snapshot String
+  estado String @default("creado")
+  intentos Int @default(0)
+  codigo String?
+  mensaje String?
+  ticket String?
+  hash String?
+  xmlCifrado String?
+  cdrCifrado String?
+  leaseId String?
+  leaseUntil DateTime?
+  emitidoAt DateTime @default(now())
+  actualizadoAt DateTime @updatedAt
+  @@unique([ruc, tipo, serie, numero])
+  @@index([estado, leaseUntil])
+}
+
 /// Personal del gimnasio (admin / recepcion). Los socios NO viven aqui.
 model User {
   id               String    @id @default(cuid())

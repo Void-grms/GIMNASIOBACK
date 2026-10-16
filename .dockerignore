@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+.env
+.env.*
+backups
+reports
+uploads
+*.db
+*.xlsx
+billing-engine/vendor

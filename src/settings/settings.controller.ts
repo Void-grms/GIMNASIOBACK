@@ -47,6 +47,13 @@ export class SettingsController {
     return this.settings.publico();
   }
 
+  @Get('admin')
+  @UseGuards(SoloStaffGuard)
+  administrativo(@SesionActual() sesion: Sesion) {
+    if (sesion.rol !== 'admin') throw new ForbiddenException('Solo el administrador puede consultar la configuracion');
+    return this.settings.administrativo();
+  }
+
   @Patch()
   @UseGuards(SoloStaffGuard)
   actualizar(@Body() dto: AjustesDto, @SesionActual() sesion: Sesion) {
