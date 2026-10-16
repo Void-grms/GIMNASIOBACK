@@ -79,9 +79,9 @@ export class PortalService {
         consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } },
         payments: { orderBy: { fecha: 'desc' }, take: 10 },
         checkIns: {
-          where: { resultado: 'permitido' },
+          where: { resultado: 'permitido', tipo: 'entrada' },
           orderBy: { timestamp: 'desc' },
-          take: 30,
+          take: 365,
         },
       },
     });
@@ -97,10 +97,10 @@ export class PortalService {
       ocultarEnRanking: socio.ocultarEnRanking,
       casillero: casillero?.numero ?? null,
       racha: this.racha(socio.checkIns.map((c) => c.timestamp)),
-      asistenciasMes: socio.checkIns.filter(
+      asistenciasMes: new Set(socio.checkIns.filter(
         (c) => c.timestamp.getTime() > Date.now() - 30 * 24 * 3600 * 1000,
-      ).length,
-      ultimasVisitas: socio.checkIns.slice(0, 10).map((c) => c.timestamp),
+      ).map(c => diaLimaDe(c.timestamp))).size,
+      ultimasVisitas: Array.from(new Map(socio.checkIns.map(c => [diaLimaDe(c.timestamp), c.timestamp])).values()).slice(0, 10),
       pagos: socio.payments.map((p) => ({
         id: p.id,
         monto: p.monto,

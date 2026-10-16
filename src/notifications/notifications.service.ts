@@ -62,13 +62,13 @@ export class NotificationsService {
       });
 
       const telefono = (m.member.telefono || '').replace(/\D/g, '');
-      const mensaje = this.redactar(m.member.nombres, m.plan.nombre, dias);
+      const mensaje = this.redactar(m.member.nombres, m.planNombre ?? m.plan.nombre, dias);
 
       avisos.push({
         memberId: m.memberId,
         nombre: `${m.member.nombres} ${m.member.apellidos}`,
         telefono: m.member.telefono,
-        plan: m.plan.nombre,
+        plan: m.planNombre ?? m.plan.nombre,
         vence: formatoFecha(m.fechaFin),
         diasRestantes: dias,
         tipo,

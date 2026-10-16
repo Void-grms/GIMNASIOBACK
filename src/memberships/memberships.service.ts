@@ -1,8 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { MembersService } from '../members/members.service';
 import { fechaFinDe, formatoFecha, hoyLima, inicioDeNuevaMembresia } from '../common/fechas';
+import { comprobarOferta, CondicionesPlan, congelarPlan, conPlanContratado, versionOferta } from '../plans/condiciones';
 
 type DatosComprobante = {
   tipo: string;
@@ -31,11 +33,14 @@ export class MembershipsService {
   async vender(dto: {
     memberId: string;
     planId: string;
+    versionOferta?: string;
     metodo: string;
     monto?: number;
     observacion?: string;
     cajeroId?: string;
     aceptaTerminos?: boolean;
+    /** Solo uso interno: oferta ya aceptada en una solicitud de renovacion. */
+    condicionesAceptadas?: CondicionesPlan;
     comprobante?: {
       tipo: string;
       clienteTipoDoc: string;
@@ -48,57 +53,13 @@ export class MembershipsService {
       throw new BadRequestException(`Metodo de pago invalido. Use: ${METODOS.join(', ')}`);
     }
 
-    const [socio, plan] = await Promise.all([
-      this.prisma.member.findUnique({ where: { id: dto.memberId } }),
-      this.prisma.plan.findUnique({ where: { id: dto.planId } }),
-    ]);
-    if (!socio) throw new NotFoundException('Socio no encontrado');
-    if (!plan || !plan.activo) throw new NotFoundException('Plan no encontrado o inactivo');
-    if (!socio.activo) throw new BadRequestException('El socio esta dado de baja');
     // El consumidor tiene que ver y aceptar las condiciones antes de pagar.
     if (!dto.aceptaTerminos) {
       throw new BadRequestException(
         'Falta que el socio acepte las condiciones de la membresia antes de cobrar',
       );
     }
-    if (plan.requiereEvidencia && !socio.esUniversitario) {
-      throw new BadRequestException(
-        `El plan "${plan.nombre}" exige evidencia. Marca al socio como universitario tras verificar su carne vigente.`,
-      );
-    }
-
-    const anterior = await this.prisma.membership.findFirst({
-      where: { memberId: dto.memberId, estado: 'activa' },
-      orderBy: { fechaFin: 'desc' },
-    });
-
-    // El pase diario siempre es para hoy; no se encola detras de otra membresia.
-    const esPaseDiario = plan.duracionDias === 1;
-    const fechaInicio = esPaseDiario
-      ? hoyLima()
-      : inicioDeNuevaMembresia(anterior?.fechaFin ?? null, this.DIAS_GRACIA);
-    const fechaFin = fechaFinDe(fechaInicio, plan.duracionDias);
-    const monto = dto.monto ?? plan.precio;
-
-    const membresia = await this.prisma.membership.create({
-      data: {
-        memberId: dto.memberId,
-        planId: plan.id,
-        fechaInicio,
-        fechaFin,
-        precioPagado: monto,
-        observacion: dto.observacion || null,
-        payments: {
-          create: {
-            memberId: dto.memberId,
-            monto,
-            metodo: dto.metodo,
-            cajeroId: dto.cajeroId || null,
-          },
-        },
-      },
-      include: { plan: true, payments: true },
-    });
+    const { socio, condiciones, membresia, esPaseDiario, fechaInicio, fechaFin, monto } = await this.crearVenta(dto);
 
     await this.members.registrarConsentimiento(dto.memberId, 'terminos', 'cobro');
 
@@ -125,7 +86,7 @@ export class MembershipsService {
         },
         items: [
           {
-            descripcion: `${plan.nombre} — ${formatoFecha(fechaInicio)} al ${formatoFecha(fechaFin)}`,
+            descripcion: `${condiciones.planNombre} — ${formatoFecha(fechaInicio)} al ${formatoFecha(fechaFin)}${condiciones.limiteAsistencias === null ? '' : ` · ${condiciones.limiteAsistencias} asistencias`}`,
             cantidad: 1,
             precioUnitario: monto,
           },
@@ -137,7 +98,7 @@ export class MembershipsService {
     }
 
     return {
-      ...membresia,
+      ...conPlanContratado(membresia),
       inicio: formatoFecha(membresia.fechaInicio),
       vence: formatoFecha(membresia.fechaFin),
       arrancaDespues: !esPaseDiario && fechaInicio.getTime() > hoyLima().getTime(),
@@ -145,6 +106,65 @@ export class MembershipsService {
       comprobante,
       errorComprobante,
     };
+  }
+
+  private async crearVenta(dto: {
+    memberId: string; planId: string; metodo: string; monto?: number; observacion?: string;
+    cajeroId?: string; condicionesAceptadas?: CondicionesPlan; versionOferta?: string;
+  }) {
+    for (let intento = 0; intento < 3; intento++) {
+      try {
+        return await this.prisma.$transaction(async tx => {
+          // Mismo orden de locks que asistencia: primero socio, despues catalogo.
+          const tomada = await tx.member.updateMany({ where: { id: dto.memberId }, data: { portalVersion: { increment: 0 } } });
+          if (!tomada.count) throw new NotFoundException('Socio no encontrado');
+          const socio = await tx.member.findUnique({ where: { id: dto.memberId } });
+          const planTomado = await tx.plan.updateMany({ where: { id: dto.planId }, data: { orden: { increment: 0 } } });
+          if (!planTomado.count) throw new NotFoundException('Plan no encontrado');
+          const plan = await tx.plan.findUnique({ where: { id: dto.planId } });
+          if (!dto.condicionesAceptadas) comprobarOferta(plan, dto.versionOferta);
+          if (!plan.activo && !dto.condicionesAceptadas) throw new NotFoundException('Plan no encontrado o inactivo');
+          if (!socio.activo) throw new BadRequestException('El socio esta dado de baja');
+          const condiciones = dto.condicionesAceptadas ?? congelarPlan(plan);
+          if (condiciones.requiereEvidenciaContratada && !socio.esUniversitario) {
+            throw new BadRequestException(`El plan "${condiciones.planNombre}" exige evidencia. Verifica el carne universitario vigente.`);
+          }
+          const anterior = await this.periodoAnterior(dto.memberId, tx);
+          const agotada = anterior?.limiteAsistencias != null && anterior.asistenciasUsadas >= anterior.limiteAsistencias;
+          const esPaseDiario = condiciones.duracionDiasContratada === 1;
+          const fechaInicio = esPaseDiario ? hoyLima() : inicioDeNuevaMembresia(agotada ? null : anterior?.fechaFin ?? null, this.DIAS_GRACIA);
+          const fechaFin = fechaFinDe(fechaInicio, condiciones.duracionDiasContratada);
+          const monto = dto.monto ?? plan.precio;
+          if (!Number.isFinite(monto) || monto < 0 || Math.abs(monto * 100 - Math.round(monto * 100)) > 0.000001) {
+            throw new BadRequestException('El monto debe ser positivo o cero, con hasta dos decimales');
+          }
+          const membresia = await tx.membership.create({
+            data: { memberId: dto.memberId, planId: plan.id, fechaInicio, fechaFin, precioPagado: monto,
+              ...condiciones, observacion: dto.observacion || null,
+              payments: { create: { memberId: dto.memberId, monto, metodo: dto.metodo, cajeroId: dto.cajeroId || null } } },
+            include: { plan: true, payments: true },
+          });
+          return { socio, condiciones, membresia, esPaseDiario, fechaInicio, fechaFin, monto };
+        }, { maxWait: 10000, timeout: 10000 });
+      } catch (error) {
+        if (['P2034', 'P1008'].includes(error?.code) && intento < 2) {
+          await new Promise(resolve => setTimeout(resolve, 25 * (intento + 1)));
+          continue;
+        }
+        if (['P2028', 'P2034', 'P1008'].includes(error?.code)) throw new ServiceUnavailableException('Hay otro cobro en curso. Intenta de nuevo en unos segundos.');
+        throw error;
+      }
+    }
+  }
+
+  /** Un periodo agotado no debe tapar otro util, aunque venza mas tarde. */
+  private async periodoAnterior(memberId: string, db: Prisma.TransactionClient = this.prisma) {
+    const periodos = await db.membership.findMany({
+      where: { memberId, estado: 'activa' }, orderBy: [{ fechaFin: 'desc' }, { createdAt: 'desc' }],
+    });
+    const hoy = hoyLima();
+    return periodos.find(m => m.fechaFin >= hoy &&
+      (m.limiteAsistencias == null || m.asistenciasUsadas < m.limiteAsistencias)) ?? periodos[0] ?? null;
   }
 
   async anular(id: string, motivo?: string) {
@@ -156,30 +176,32 @@ export class MembershipsService {
     });
   }
 
-  listarDeSocio(memberId: string) {
-    return this.prisma.membership.findMany({
+  async listarDeSocio(memberId: string) {
+    const lista = await this.prisma.membership.findMany({
       where: { memberId },
       orderBy: { fechaInicio: 'desc' },
       include: { plan: true, payments: true },
     });
+    return lista.map(conPlanContratado);
   }
 
   /** Simulacion: que fechas tendria la venta sin registrarla. Sirve para la UI. */
   async previsualizar(memberId: string, planId: string) {
     const plan = await this.prisma.plan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException('Plan no encontrado');
-    const anterior = await this.prisma.membership.findFirst({
-      where: { memberId, estado: 'activa' },
-      orderBy: { fechaFin: 'desc' },
-    });
+    if (!plan || !plan.activo) throw new NotFoundException('Plan no encontrado o inactivo');
+    const anterior = await this.periodoAnterior(memberId);
     const inicio =
       plan.duracionDias === 1
         ? hoyLima()
-        : inicioDeNuevaMembresia(anterior?.fechaFin ?? null, this.DIAS_GRACIA);
+        : inicioDeNuevaMembresia(anterior?.limiteAsistencias != null && anterior.asistenciasUsadas >= anterior.limiteAsistencias ? null : anterior?.fechaFin ?? null, this.DIAS_GRACIA);
     return {
       plan: plan.nombre,
       precio: plan.precio,
       duracionDias: plan.duracionDias,
+      limiteAsistencias: plan.limiteAsistencias,
+      descripcion: plan.descripcion,
+      esPromocion: plan.esPromocion,
+      versionOferta: versionOferta(plan),
       inicio: formatoFecha(inicio),
       vence: formatoFecha(fechaFinDe(inicio, plan.duracionDias)),
     };

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import {
-  IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min, ValidateNested,
+  IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, Matches, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { EsMonto } from '../common/validadores';
 import { MembershipsService } from './memberships.service';
@@ -20,6 +20,7 @@ class ComprobanteDto {
 class VenderDto {
   @IsString() memberId: string;
   @IsString() planId: string;
+  @IsString() @Matches(/^[a-f0-9]{64}$/, { message: 'Vuelve a seleccionar el plan para revisar sus condiciones antes de cobrar' }) versionOferta: string;
   @IsIn(['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'], {
     message: 'Metodo de pago invalido',
   })

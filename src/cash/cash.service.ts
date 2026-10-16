@@ -44,7 +44,7 @@ export class CashService {
       monto: p.monto,
       metodo: p.metodo,
       concepto: p.concepto,
-      detalle: p.membership?.plan?.nombre ?? (p.concepto === 'producto' ? 'Venta de mostrador' : '—'),
+      detalle: p.membership?.planNombre ?? p.membership?.plan?.nombre ?? (p.concepto === 'producto' ? 'Venta de mostrador' : '—'),
       socio: p.member ? `${p.member.nombres} ${p.member.apellidos}` : 'Visitante',
       dni: p.member?.dni ?? null,
       cajero: p.cajero?.nombre ?? '—',

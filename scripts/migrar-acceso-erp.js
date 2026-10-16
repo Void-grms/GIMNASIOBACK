@@ -9,8 +9,8 @@ async function migrar(prisma, databaseUrl) {
   }
   const schema = new URL(databaseUrl).searchParams.get('schema') || 'public';
   if (schema !== 'public') throw new Error('La migracion ERP requiere el esquema public');
-  const archivo = path.join(__dirname, '..', 'prisma', 'erp-access.sql');
-  const statements = fs.readFileSync(archivo, 'utf8').split(/^-- statement-break\s*$/m).map(s => s.trim()).filter(s => s && !/^--[^\n]*$/.test(s));
+  const statements = ['erp-access.sql', 'membership-plans.sql'].flatMap(nombre =>
+    fs.readFileSync(path.join(__dirname, '..', 'prisma', nombre), 'utf8').split(/^-- statement-break\s*$/m).map(s => s.trim()).filter(s => s && !/^--[^\n]*$/.test(s)));
   const aplicado = await prisma.$transaction(async tx => {
     await tx.$queryRawUnsafe('SELECT pg_advisory_xact_lock(20261014, 1)::text AS locked');
     await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '15s'");

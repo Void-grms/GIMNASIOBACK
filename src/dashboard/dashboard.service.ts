@@ -44,13 +44,13 @@ export class DashboardService {
     // Ingreso mensual equivalente: cada membresia vigente aporta su precio
     // prorrateado a 30 dias. Comparable entre planes de distinta duracion.
     const mrr = vigentes.reduce(
-      (suma, m) => suma + (m.precioPagado / Math.max(m.plan.duracionDias, 1)) * 30,
+      (suma, m) => suma + (m.precioPagado / Math.max(m.duracionDiasContratada ?? m.plan.duracionDias, 1)) * 30,
       0,
     );
 
     const mix: Record<string, number> = {};
     for (const pago of pagosMes) {
-      const etiqueta = pago.membership?.plan?.nombre || 'Otros';
+      const etiqueta = pago.membership?.planNombre ?? pago.membership?.plan?.nombre ?? 'Otros';
       mix[etiqueta] = (mix[etiqueta] || 0) + pago.monto;
     }
 
@@ -68,7 +68,7 @@ export class DashboardService {
         memberId: m.memberId,
         nombre: `${m.member.nombres} ${m.member.apellidos}`,
         telefono: m.member.telefono,
-        plan: m.plan.nombre,
+        plan: m.planNombre ?? m.plan.nombre,
         vence: formatoFecha(m.fechaFin),
       })),
       mixIngresos: Object.entries(mix)
@@ -101,7 +101,7 @@ export class DashboardService {
           memberId: membresia.memberId,
           nombre: `${membresia.member.nombres} ${membresia.member.apellidos}`,
           telefono: membresia.member.telefono,
-          plan: membresia.plan.nombre,
+          plan: membresia.planNombre ?? membresia.plan.nombre,
           vence: formatoFecha(membresia.fechaFin),
           ultimaVisita: ultima ? diaLimaDe(ultima.timestamp) : null,
           diasSinVenir: ultima

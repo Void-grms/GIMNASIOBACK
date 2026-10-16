@@ -2,7 +2,7 @@ import {
   Body, Controller, ForbiddenException, Get, Ip, Param, Post, Res, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { RenewalsService } from './renewals.service';
 import { SoloStaffGuard } from '../auth/solo-staff.guard';
 import { SesionActual } from '../auth/sesion.decorator';
@@ -10,6 +10,7 @@ import type { Sesion } from '../auth/jwt.guard';
 
 class SolicitarDto {
   @IsString() planId: string;
+  @IsString() @Matches(/^[a-f0-9]{64}$/, { message: 'Vuelve a seleccionar el plan para revisar sus condiciones antes de renovar' }) versionOferta: string;
   /** Captura del Yape como data URL (el portal la reduce antes de enviarla). */
   @IsString() @MaxLength(4_500_000) imagen: string;
   @IsOptional() @IsString() @MaxLength(30) operacion?: string;

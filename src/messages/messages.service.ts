@@ -78,7 +78,7 @@ export class MessagesService {
     const valores: Record<string, string> = {
       '{nombre}': pago.member.nombres.split(' ')[0],
       '{gimnasio}': ajustes.nombreComercial || 'el gimnasio',
-      '{plan}': pago.membership.plan.nombre,
+      '{plan}': pago.membership.planNombre ?? pago.membership.plan.nombre,
       '{inicio}': fechaLarga(pago.membership.fechaInicio),
       '{vence}': fechaLarga(pago.membership.fechaFin),
       '{dias}': String(dias),
@@ -143,7 +143,7 @@ export class MessagesService {
       socio: pago.member ? { nombreCompleto: `${pago.member.nombres} ${pago.member.apellidos}` } : null,
       membresia: pago.membership
         ? {
-            plan: pago.membership.plan.nombre,
+            plan: pago.membership.planNombre ?? pago.membership.plan.nombre,
             inicio: pago.membership.fechaInicio.toISOString().slice(0, 10),
             vence: pago.membership.fechaFin.toISOString().slice(0, 10),
             anulada: pago.membership.estado === 'anulada',

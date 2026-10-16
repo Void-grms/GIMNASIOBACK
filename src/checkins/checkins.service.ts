@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
-import { diasRestantes, hoyLima, soloFecha } from '../common/fechas';
+import { diasRestantes, hoyLima, rangoDelDia, soloFecha } from '../common/fechas';
 import { leerIdentificador } from './identificador';
 
 export type TipoMovimiento = 'entrada' | 'salida';
@@ -84,8 +84,11 @@ export class CheckinsService {
     }
   }
 
-  private membresiaVigente(memberId: string, db: Prisma.TransactionClient) {
-    return db.membership.findFirst({ where: { memberId, estado: 'activa' }, orderBy: { fechaFin: 'desc' }, include: { plan: true } });
+  private async membresiaVigente(memberId: string, db: Prisma.TransactionClient, hoy = hoyLima()) {
+    return await db.membership.findFirst({
+      where: { memberId, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
+      orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }, { id: 'desc' }], include: { plan: true },
+    }) ?? db.membership.findFirst({ where: { memberId, estado: 'activa' }, orderBy: { fechaFin: 'desc' }, include: { plan: true } });
   }
 
   async estaDentro(memberId: string): Promise<boolean> {
@@ -278,8 +281,9 @@ export class CheckinsService {
       return this.denegar(socio, 'entrada', metodo, dispositivo, 'Socio dado de baja', null, tx);
     }
 
-    const membresia = await this.membresiaVigente(socio.id, tx);
-    const hoy = hoyLima();
+    const instante = new Date();
+    const hoy = hoyLima(instante);
+    const membresia = await this.membresiaVigente(socio.id, tx, hoy);
 
     if (!membresia) {
       return this.denegar(socio, 'entrada', metodo, dispositivo, 'Sin membresia registrada', null, tx);
@@ -297,33 +301,25 @@ export class CheckinsService {
       );
     }
     if (soloFecha(membresia.fechaInicio).getTime() > hoy.getTime()) {
-      // La mas lejana todavia no empieza, pero puede haber otra que cubra hoy:
-      // quien renueva antes de vencer tiene la actual vigente y la nueva
-      // encolada detras. Sin esto, renovar temprano le cerraba la puerta.
-      const deHoy = await tx.membership.findFirst({
-        where: { memberId: socio.id, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
-        orderBy: { fechaFin: 'desc' },
+      return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia, tx);
+    }
+
+    if (membresia.limiteAsistencias != null) {
+      const rango = rangoDelDia(hoy);
+      // Un regreso durante el mismo dia no consume otro dia de entrenamiento.
+      const yaAsistio = await tx.checkIn.findFirst({
+        where: { membershipId: membresia.id, resultado: 'permitido', tipo: 'entrada', timestamp: { gte: rango.inicio, lt: rango.fin } },
+        select: { id: true },
       });
-      if (!deHoy) {
-        return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia, tx);
+      if (!yaAsistio) {
+        if (membresia.asistenciasUsadas >= membresia.limiteAsistencias) {
+          return this.denegar(socio, 'entrada', metodo, dispositivo,
+            `Asistencias agotadas: ya utilizo las ${membresia.limiteAsistencias} de su membresia. Puede renovar en recepcion.`, membresia, tx);
+        }
+        // El lock del socio protege contador, consulta de dia e insercion frente a otras replicas.
+        await tx.membership.update({ where: { id: membresia.id }, data: { asistenciasUsadas: { increment: 1 } } });
+        membresia.asistenciasUsadas++;
       }
-      const checkIn = await tx.checkIn.create({
-        data: {
-          memberId: socio.id,
-          membershipId: deHoy.id,
-          tipo: 'entrada',
-          metodo,
-          dispositivo: dispositivo || null,
-          resultado: 'permitido',
-          timestamp: new Date(),
-        },
-      });
-      return {
-        resultado: 'permitido',
-        tipo: 'entrada',
-        socio: this.members.resumen(socio, membresia, true),
-        checkInId: checkIn.id,
-      };
     }
 
     const checkIn = await tx.checkIn.create({
@@ -334,7 +330,7 @@ export class CheckinsService {
         metodo,
         dispositivo: dispositivo || null,
         resultado: 'permitido',
-        timestamp: new Date(),
+        timestamp: instante,
       },
     });
 
