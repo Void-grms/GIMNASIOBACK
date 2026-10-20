@@ -113,6 +113,8 @@ model Member {
   complaints     Complaint[]
   invitados      GuestPass[]
   entrenamientos WorkoutSet[]
+  sesionesEntrenamiento WorkoutSession[]
+  operacionesEntrenamiento WorkoutOperation[]
   medidas        BodyLog[]
   pedidos        Order[]
   rutinas        RoutineAssignment[]
@@ -672,13 +674,57 @@ model WorkoutSet {
   repeticiones Int
   pesoKg       Float
   nota         String?
+  /// Nulo en historicos: su unidad se interpreta con Exercise.grupo, sin reescribirlos.
+  tipo         String?
+  duracionMinutos Float?
+  nivel        Float?
+  sessionId    String?
+  operationId  String?
+  deletedAt    DateTime?
   createdAt    DateTime @default(now())
 
   member   Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   exercise Exercise @relation(fields: [exerciseId], references: [id])
+  session WorkoutSession? @relation(fields: [sessionId], references: [id])
+  operation WorkoutOperation? @relation(fields: [operationId], references: [id])
 
   @@index([memberId, fecha])
   @@index([memberId, exerciseId, fecha])
+  @@index([sessionId, deletedAt])
+  @@index([operationId])
+}
+
+/// La sesion no representa una asistencia ni consume cupos de membresia.
+model WorkoutSession {
+  id String @id @default(cuid())
+  memberId String
+  /// Un solo entrenamiento abierto por socio, incluso entre replicas/pestanas.
+  activeMemberId String? @unique
+  operationId String
+  titulo String @default("Mi entrenamiento")
+  fecha DateTime
+  startedAt DateTime @default(now())
+  endedAt DateTime?
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  series WorkoutSet[]
+
+  @@unique([memberId, operationId])
+  @@index([memberId, startedAt])
+}
+
+/// Registro de una escritura para que una respuesta perdida no duplique series.
+/// Conservado tras deshacer una serie: reintentar no debe resucitarla.
+model WorkoutOperation {
+  id String @id @default(cuid())
+  memberId String
+  operationId String
+  payloadHash String
+  responseJson String
+  createdAt DateTime @default(now())
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  series WorkoutSet[]
+
+  @@unique([memberId, operationId])
 }
 
 /// Peso corporal y medidas que el socio anota si quiere.

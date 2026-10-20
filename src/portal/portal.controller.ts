@@ -6,7 +6,7 @@ import { LoginRateGuard } from '../common/login-rate.guard';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Length, Max,
-  MaxLength, Matches, Min, ValidateNested,
+  MaxLength, Matches, Min, ValidateNested, IsUUID,
 } from 'class-validator';
 import { PortalService } from './portal.service';
 import { CheckinsService } from '../checkins/checkins.service';
@@ -44,15 +44,21 @@ class PerfilDto {
 }
 
 class SerieDto {
+  @IsOptional()
   @IsInt({ message: 'Las repeticiones deben ser un numero entero' })
   @Min(1) @Max(200)
   repeticiones: number;
 
-  @IsNumber() @Min(0, { message: 'El peso no puede ser negativo' }) @Max(500)
+  @IsOptional() @IsNumber() @Min(0, { message: 'El peso no puede ser negativo' }) @Max(500)
   pesoKg: number;
+
+  @IsOptional() @IsNumber() @Min(0.1) @Max(360) duracionMinutos?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(100) nivel?: number;
 }
 
 class EntrenamientoDto {
+  @IsOptional() @IsUUID() operationId?: string;
+  @IsOptional() @IsString() @MaxLength(80) sessionId?: string;
   @IsOptional() @IsString() fecha?: string;
   @IsOptional() @IsString() exerciseId?: string;
   @IsOptional() @IsString() @MaxLength(80) nombreEjercicio?: string;
@@ -63,6 +69,11 @@ class EntrenamientoDto {
   series: SerieDto[];
 
   @IsOptional() @IsString() @MaxLength(200) nota?: string;
+}
+
+class IniciarSesionEntrenamientoDto {
+  @IsUUID() operationId: string;
+  @IsOptional() @IsString() @MaxLength(80) titulo?: string;
 }
 
 class EjercicioDto {
@@ -262,6 +273,31 @@ export class PortalController {
     return this.training.borrarSerie(this.soloSocio(sesion), id);
   }
 
+  @Patch('workouts/:id')
+  editarSerie(@SesionActual() sesion: Sesion, @Param('id') id: string, @Body() dto: SerieDto) {
+    return this.training.editarSerie(this.soloSocio(sesion), id, dto);
+  }
+
+  @Get('workout-sessions/active')
+  sesionEntrenamientoActiva(@SesionActual() sesion: Sesion) {
+    return this.training.sesionActiva(this.soloSocio(sesion));
+  }
+
+  @Get('workout-sessions/:id')
+  sesionEntrenamiento(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.sesionEntrenamiento(this.soloSocio(sesion), id);
+  }
+
+  @Post('workout-sessions')
+  iniciarSesionEntrenamiento(@SesionActual() sesion: Sesion, @Body() dto: IniciarSesionEntrenamientoDto) {
+    return this.training.iniciarSesion(this.soloSocio(sesion), dto);
+  }
+
+  @Post('workout-sessions/:id/finish')
+  finalizarSesionEntrenamiento(@SesionActual() sesion: Sesion, @Param('id') id: string) {
+    return this.training.finalizarSesion(this.soloSocio(sesion), id);
+  }
+
   @Get('week')
   semana(@SesionActual() sesion: Sesion, @Query('desde') desde?: string) {
     return this.training.semana(this.soloSocio(sesion), desde);
@@ -292,13 +328,15 @@ export class PortalController {
     @SesionActual() sesion: Sesion,
     @Query('desde') desde?: string,
     @Query('hasta') hasta?: string,
+    @Query('pagina') pagina?: string,
+    @Query('limite') limite?: string,
   ) {
-    return this.training.historial(this.soloSocio(sesion), desde, hasta);
+    return this.training.historial(this.soloSocio(sesion), desde, hasta, pagina, limite);
   }
 
   @Get('progress/:exerciseId')
-  progreso(@SesionActual() sesion: Sesion, @Param('exerciseId') exerciseId: string) {
-    return this.training.progreso(this.soloSocio(sesion), exerciseId);
+  progreso(@SesionActual() sesion: Sesion, @Param('exerciseId') exerciseId: string, @Query('semanas') semanas?: string) {
+    return this.training.progreso(this.soloSocio(sesion), exerciseId, semanas);
   }
 
   // ---------------------------------------------------------- peso corporal
