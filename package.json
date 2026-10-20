@@ -11,6 +11,8 @@
     "db:seed": "ts-node prisma/seed.ts",
     "db:studio": "prisma studio",
     "test:logica": "ts-node test/logica.test.ts",
+    "test:training": "node scripts/probar-training-sqlite.cjs",
+    "test:training-pg": "node scripts/probar-training-pg.cjs",
     "test:asistencia-erp": "ts-node test/asistencia-erp.test.ts",
     "test:acceso": "ts-node test/acceso.test.ts",
     "test:auth-concurrencia": "ts-node test/auth-concurrencia.test.ts",

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SOLO_FUERZA } from './training.service';
 import { diaLimaDe, hoyLima } from '../common/fechas';
 
 const ZONAS = ['pecho', 'espalda', 'core', 'hombro', 'brazo', 'gluteo', 'pierna', 'cardio'];
@@ -46,17 +47,15 @@ export class RankingService {
       diasPorSocio.get(i.memberId)!.add(diaLimaDe(i.timestamp));
     }
 
-    const cardio = await this.prisma.exercise.findMany({ where: { grupo: 'cardio' }, select: { id: true } });
-    const sinCardio = { notIn: cardio.map((c) => c.id) };
     const [antes, ahora] = await Promise.all([
       this.prisma.workoutSet.groupBy({
         by: ['memberId', 'exerciseId'],
-        where: { fecha: { lt: inicioFecha }, exerciseId: sinCardio },
+        where: { fecha: { lt: inicioFecha }, ...SOLO_FUERZA },
         _max: { pesoKg: true },
       }),
       this.prisma.workoutSet.groupBy({
         by: ['memberId', 'exerciseId'],
-        where: { fecha: { gte: inicioFecha }, exerciseId: sinCardio },
+        where: { fecha: { gte: inicioFecha }, ...SOLO_FUERZA },
         _max: { pesoKg: true },
       }),
     ]);
@@ -132,7 +131,7 @@ export class RankingService {
     });
     const nombreEj = new Map(ejercicios.map((e) => [e.id, e.nombre]));
     const zonasMes = await this.prisma.workoutSet.findMany({
-      where: { memberId, fecha: { gte: inicioFecha } },
+      where: { memberId, deletedAt: null, fecha: { gte: inicioFecha } },
       distinct: ['exerciseId'],
       select: { exercise: { select: { grupo: true } } },
     });
