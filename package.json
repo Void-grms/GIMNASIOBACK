@@ -20,6 +20,8 @@
     "test:membresias": "ts-node test/membresias.test.ts",
     "test:pase-diario": "node scripts/probar-pase-diario.cjs sqlite",
     "test:pase-diario-pg": "node scripts/probar-pase-diario.cjs pg",
+    "test:cuentas": "node scripts/probar-cuentas-membresia.cjs sqlite",
+    "test:cuentas-pg": "node scripts/probar-cuentas-membresia.cjs pg",
     "test:carga": "node scripts/probar-carga.cjs",
     "test:importacion": "ts-node test/importacion.test.ts",
     "importar:erp": "ts-node scripts/importar-erp.ts",

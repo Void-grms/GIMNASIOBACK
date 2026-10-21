@@ -4,8 +4,9 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
-import { diasRestantes, hoyLima, rangoDelDia, soloFecha } from '../common/fechas';
+import { diasRestantes, formatoFecha, hoyLima, rangoDelDia, soloFecha } from '../common/fechas';
 import { leerIdentificador } from './identificador';
+import { elegirMembresia, pausaActual } from '../memberships/cuenta.util';
 
 export type TipoMovimiento = 'entrada' | 'salida';
 
@@ -85,10 +86,8 @@ export class CheckinsService {
   }
 
   private async membresiaVigente(memberId: string, db: Prisma.TransactionClient, hoy = hoyLima()) {
-    return await db.membership.findFirst({
-      where: { memberId, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
-      orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }, { id: 'desc' }], include: { plan: true },
-    }) ?? db.membership.findFirst({ where: { memberId, estado: 'activa' }, orderBy: { fechaFin: 'desc' }, include: { plan: true } });
+    const lista = await db.membership.findMany({ where: { memberId, estado: 'activa' }, orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }, { id: 'desc' }], include: { plan: true, congelamientos: true, payments: { select: { monto: true, montoCentimos: true } } } });
+    return elegirMembresia(lista, hoy);
   }
 
   async estaDentro(memberId: string): Promise<boolean> {
@@ -303,6 +302,8 @@ export class CheckinsService {
     if (soloFecha(membresia.fechaInicio).getTime() > hoy.getTime()) {
       return this.denegar(socio, 'entrada', metodo, dispositivo, 'La membresia aun no empieza', membresia, tx);
     }
+    const pausa = pausaActual(membresia, hoy);
+    if (pausa) return this.denegar(socio, 'entrada', metodo, dispositivo, `Membresía congelada hasta ${formatoFecha(pausa.hasta)}. Su vigencia se amplió por los días autorizados.`, membresia, tx);
 
     if (membresia.limiteAsistencias != null) {
       const rango = rangoDelDia(hoy);
@@ -382,7 +383,7 @@ export class CheckinsService {
     const registros = await this.prisma.checkIn.findMany({
       orderBy: { timestamp: 'desc' },
       take: limite,
-      include: { member: true, membership: { include: { plan: true } } },
+      include: { member: true, membership: { include: { plan: true, congelamientos: true, payments: { select: { monto: true, montoCentimos: true } } } } },
     });
     return registros.map((r) => ({
       id: r.id,

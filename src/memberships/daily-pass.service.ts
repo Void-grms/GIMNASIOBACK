@@ -9,6 +9,7 @@ import { formatoFecha, hoyLima, rangoDelDia } from '../common/fechas';
 import { hashPassword } from '../common/password';
 import { congelarPlan, versionOferta } from '../plans/condiciones';
 import type { DailyPassDto } from './daily-pass.controller';
+import { pausaActual } from './cuenta.util';
 
 const hash = (texto: string) => createHash('sha256').update(texto).digest('hex');
 const normalizar = (texto: string) => texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -111,11 +112,11 @@ export class DailyPassService {
           const horasMaximas = Number(process.env.HORAS_MAX_DENTRO || 6);
           const cierreOlvidado = ultimo?.tipo === 'entrada' && ultimo.timestamp.getTime() < Date.now() - horasMaximas * 60 * 60 * 1000;
           if (ultimo?.tipo === 'entrada' && !cierreOlvidado) throw conflicto('INGRESO_ABIERTO', 'Esta persona ya tiene un ingreso abierto. No vuelvas a cobrar; revisa su salida en recepción.');
-          const vigentes = await tx.membership.findMany({ where: { memberId: socio.id, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } } });
+          const vigentes = await tx.membership.findMany({ where: { memberId: socio.id, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } }, include: { congelamientos: true } });
           const rango = rangoDelDia(hoy);
           const asistencias = await tx.checkIn.findMany({ where: { memberId: socio.id, resultado: 'permitido', tipo: 'entrada', timestamp: { gte: rango.inicio, lt: rango.fin } }, select: { membershipId: true } });
           const yaUso = new Set(asistencias.map(x => x.membershipId));
-          if (vigentes.some(m => m.limiteAsistencias == null || m.asistenciasUsadas < m.limiteAsistencias || yaUso.has(m.id))) throw conflicto('COBERTURA_VIGENTE', 'Ya tiene una membresía utilizable hoy. Registra su ingreso o reingreso sin cobrar otro pase.');
+          if (vigentes.some(m => !pausaActual(m, hoy) && (m.limiteAsistencias == null || m.asistenciasUsadas < m.limiteAsistencias || yaUso.has(m.id)))) throw conflicto('COBERTURA_VIGENTE', 'Ya tiene una membresía utilizable hoy. Registra su ingreso o reingreso sin cobrar otro pase.');
 
           if (cierreOlvidado) {
             // Misma política de seis horas que el cron de accesos, sin exigir esperar al próximo cron.

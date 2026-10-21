@@ -175,6 +175,10 @@ model Membership {
   /// Ultimo dia valido inclusive: inicio + (duracionDias - 1)
   fechaFin     DateTime
   precioPagado Float
+  /// Nulo en contratos historicos: no se deducen deudas del catalogo actual.
+  totalContratadoCentimos Int?
+  fechaLimiteSaldo DateTime?
+  versionCuenta Int @default(0)
   /// Condiciones congeladas al vender; null conserva los contratos anteriores.
   planNombre                String?
   planDescripcion           String?
@@ -190,8 +194,44 @@ model Membership {
   plan     Plan      @relation(fields: [planId], references: [id])
   payments Payment[]
   checkIns CheckIn[]
+  congelamientos MembershipFreeze[]
+  operaciones MembershipOperation[]
 
   @@index([memberId, fechaFin])
+}
+
+/// Pausa autorizada inclusiva. Conserva las asistencias y no compra mas cupos.
+model MembershipFreeze {
+  id String @id @default(cuid())
+  membershipId String
+  operationId String @unique
+  desde DateTime
+  hasta DateTime
+  dias Int
+  motivo String
+  createdAt DateTime @default(now())
+  membership Membership @relation(fields: [membershipId], references: [id])
+  @@index([membershipId, desde, hasta])
+}
+
+/// Idempotencia durable y auditoria de cada cobro o cambio autorizado.
+model MembershipOperation {
+  id String @id
+  tipo String
+  huella String
+  memberId String
+  membershipId String
+  paymentId String? @unique
+  usuarioId String
+  usuarioNombre String
+  rol String
+  motivo String?
+  aprobado Boolean @default(false)
+  datos String
+  createdAt DateTime @default(now())
+  membership Membership @relation(fields: [membershipId], references: [id])
+  @@index([membershipId, createdAt])
+  @@index([memberId, createdAt])
 }
 
 /// Movimiento de dinero. Todo pago deja rastro de quien lo cobro.
@@ -203,6 +243,8 @@ model Payment {
   /// membresia | producto
   concepto      String   @default("membresia")
   monto         Float
+  /// Nuevos cobros: dinero exacto; null conserva los movimientos historicos.
+  montoCentimos Int?
   metodo        String // efectivo | yape | plin | tarjeta | transferencia
   fecha         DateTime @default(now())
   cajeroId      String?
