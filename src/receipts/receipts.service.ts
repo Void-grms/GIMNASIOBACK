@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { PseService } from './pse.service';
@@ -90,6 +91,23 @@ export class ReceiptsService {
 
   private serieInicial(tipo: string) {
     return tipo === 'factura' ? 'F001' : tipo === 'boleta' ? 'B001' : 'R001';
+  }
+
+  /** El pase de recepción confirma pago, ingreso y recibo en una sola transacción. Nunca envía a SUNAT. */
+  async emitirInternoEnTransaccion(tx: Prisma.TransactionClient, params: { paymentId: string; cliente: DatosCliente; items: LineaComprobante[]; total: number; observacion?: string }, ajustes: any) {
+    const total = redondear(params.total);
+    if (total <= 0) throw new BadRequestException('El comprobante no puede ser por S/ 0');
+    this.validar('recibo', params.cliente, total, ajustes);
+    const serie = await tx.serie.upsert({ where: { tipo_serie: { tipo: 'recibo', serie: this.serieInicial('recibo') } }, update: { correlativo: { increment: 1 } }, create: { tipo: 'recibo', serie: this.serieInicial('recibo'), correlativo: 1 } });
+    return tx.receipt.create({ data: {
+      tipo: 'recibo', codigoSunat: '', serie: serie.serie, numero: serie.correlativo,
+      emisorRuc: ajustes.ruc, emisorRazon: ajustes.razonSocial, emisorDireccion: ajustes.direccionFiscal,
+      clienteTipoDoc: params.cliente.tipoDoc, clienteNumDoc: params.cliente.numDoc || null,
+      clienteNombre: params.cliente.nombre?.trim() || 'Cliente varios', clienteDireccion: params.cliente.direccion || null,
+      gravado: 0, igv: 0, inafecto: total, total, igvTasa: 0, estadoSunat: 'no_aplica', paymentId: params.paymentId,
+      observacion: params.observacion || null,
+      items: { create: params.items.map(item => ({ descripcion: item.descripcion, cantidad: item.cantidad ?? 1, valorUnitario: redondear(item.precioUnitario), precioUnitario: redondear(item.precioUnitario), igv: 0, total: redondear(item.precioUnitario * (item.cantidad ?? 1)) })) },
+    }, include: { items: true } });
   }
 
   /**
