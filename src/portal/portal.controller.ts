@@ -173,6 +173,9 @@ export class PortalController {
     return this.portal.miPanel(this.soloSocio(sesion));
   }
 
+  @Get('cuentas')
+  cuentas(@SesionActual() sesion: Sesion) { return this.portal.cuentas(this.soloSocio(sesion)); }
+
   @PermitePinPendiente()
   @UseGuards(LoginRateGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })

@@ -162,6 +162,7 @@ export class RenewalsService {
     let membresia: any;
     try {
       membresia = await this.memberships.vender({
+        operacionInterna: id,
         memberId: r.memberId,
         planId: r.planId,
         metodo: r.metodo,

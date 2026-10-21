@@ -9,6 +9,7 @@ import { diasRestantes, formatoFecha, hoyLima } from '../common/fechas';
 import { carpetaArchivos, esPostgres } from '../common/archivos';
 import { DURACION_ACCESO_MS, consentimientoPendiente, estadoPortal, pinAleatorio, sinSecretos, validarDniPortal } from './acceso.util';
 import { conPlanContratado } from '../plans/condiciones';
+import { cuentaDe, elegirMembresia, pausaActual } from '../memberships/cuenta.util';
 
 export type EstadoSocio = 'vigente' | 'por_vencer' | 'vencido' | 'sin_membresia';
 
@@ -167,24 +168,17 @@ export class MembersService {
         : undefined,
       orderBy: [{ apellidos: 'asc' }, { nombres: 'asc' }],
       take: limite,
-      include: { memberships: { where: { estado: { in: ['activa', 'vencida'] } }, orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }], include: { plan: true } }, consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } },
+      include: { memberships: { where: { estado: { in: ['activa', 'vencida'] } }, orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }], include: { plan: true, congelamientos: true, payments: { select: { monto: true, montoCentimos: true } } } }, consents: { where: { tipo: 'datos_personales', aceptado: true }, take: 1, select: { tipo: true, aceptado: true } } },
     });
     const hoy = hoyLima();
-    return socios.map((s) => this.resumen(s, s.memberships.find(m => m.estado === 'activa' && m.fechaInicio <= hoy && m.fechaFin >= hoy)
-      ?? [...s.memberships].sort((a, b) => b.fechaFin.getTime() - a.fechaFin.getTime())[0]));
+    return socios.map((s) => this.resumen(s, elegirMembresia(s.memberships, hoy)));
   }
 
   /** Membresia con la fecha de fin mas lejana que no este anulada. */
   async membresiaVigente(memberId: string) {
     const hoy = hoyLima();
-    return await this.prisma.membership.findFirst({
-      where: { memberId, estado: 'activa', fechaInicio: { lte: hoy }, fechaFin: { gte: hoy } },
-      orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }, { id: 'desc' }], include: { plan: true },
-    }) ?? this.prisma.membership.findFirst({
-      where: { memberId, estado: 'activa' },
-      orderBy: { fechaFin: 'desc' },
-      include: { plan: true },
-    });
+    const lista = await this.prisma.membership.findMany({ where: { memberId, estado: { in: ['activa', 'vencida'] } }, orderBy: [{ createdAt: 'desc' }, { fechaFin: 'desc' }, { id: 'desc' }], include: { plan: true, congelamientos: true, payments: { select: { monto: true, montoCentimos: true } } } });
+    return elegirMembresia(lista, hoy);
   }
 
   async obtener(id: string) {
@@ -193,7 +187,7 @@ export class MembersService {
       include: {
         memberships: {
           orderBy: { fechaInicio: 'desc' },
-          include: { plan: true, payments: { select: { id: true } } },
+          include: { plan: true, congelamientos: { orderBy: { desde: 'asc' } }, operaciones: { orderBy: { createdAt: 'desc' } }, payments: { orderBy: { fecha: 'desc' }, include: { cajero: { select: { nombre: true } }, receipt: true } } },
         },
         payments: { orderBy: { fecha: 'desc' }, take: 20 },
         checkIns: { orderBy: { timestamp: 'desc' }, take: 20 },
@@ -202,12 +196,12 @@ export class MembersService {
     });
     if (!socio) throw new NotFoundException('Socio no encontrado');
     const hoy = hoyLima();
-    const vigente = [...socio.memberships].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).find((m) => m.estado === 'activa' && m.fechaInicio <= hoy && m.fechaFin >= hoy)
-      || socio.memberships.find((m) => m.estado === 'activa') || socio.memberships.find((m) => m.estado === 'vencida') || null;
+    const vigente = elegirMembresia([...socio.memberships].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()), hoy);
+    const historial = socio.memberships.map(m => ({ ...conPlanContratado(m), cuenta: cuentaDe(m) }));
     return {
       ...this.resumen(socio, vigente, await this.estaDentro(id)),
-      socio: { ...sinSecretos(socio), memberships: socio.memberships.map(conPlanContratado), ...this.resumen(socio, vigente) },
-      historial: socio.memberships.map(conPlanContratado),
+      socio: { ...sinSecretos(socio), memberships: historial, ...this.resumen(socio, vigente) },
+      historial,
     };
   }
 
@@ -222,6 +216,8 @@ export class MembersService {
    */
   resumen(socio: any, membresia: any | null, dentro = false) {
     const dias = membresia ? diasRestantes(membresia.fechaFin) : null;
+    const pausa = pausaActual(membresia);
+    const cuenta = membresia && Array.isArray(membresia.payments) ? cuentaDe(membresia) : null;
     let estado: EstadoSocio = 'sin_membresia';
     if (membresia?.estado === 'vencida') estado = 'vencido';
     else if (membresia && membresia.estado !== 'anulada' && dias !== null) {
@@ -251,6 +247,11 @@ export class MembersService {
       asistenciasUsadas: membresia?.limiteAsistencias == null ? null : membresia.asistenciasUsadas,
       asistenciasRestantes: membresia?.limiteAsistencias == null ? null : Math.max(0, membresia.limiteAsistencias - membresia.asistenciasUsadas),
       vence: membresia ? formatoFecha(membresia.fechaFin) : null,
+      inicio: membresia ? formatoFecha(membresia.fechaInicio) : null,
+      inicioProgramado: !!membresia && membresia.fechaInicio > hoyLima(),
+      pausaActualmente: !!pausa,
+      pausaHasta: pausa ? formatoFecha(new Date(pausa.hasta)) : null,
+      ...(cuenta ? { cuenta: { total: cuenta.total, pagado: cuenta.pagado, saldo: cuenta.saldo, fechaLimiteSaldo: cuenta.fechaLimiteSaldo, estado: cuenta.estado } } : {}),
       membresiaId: membresia?.id ?? null,
       dentro,
       hoy: formatoFecha(hoyLima()),

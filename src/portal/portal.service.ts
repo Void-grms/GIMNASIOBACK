@@ -4,7 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MembersService } from '../members/members.service';
 import { QrService } from '../qr/qr.service';
 import { IntentosService } from '../auth/intentos.service';
-import { diaLimaDe } from '../common/fechas';
+import { diaLimaDe, formatoFecha, hoyLima } from '../common/fechas';
+import { cuentaDe, pausaActual } from '../memberships/cuenta.util';
 import { validarPin } from '../members/acceso.util';
 import { hashPassword, verifyPassword } from '../common/password';
 
@@ -108,6 +109,17 @@ export class PortalService {
         fecha: diaLimaDe(p.fecha),
       })),
     };
+  }
+
+  /** Solo el titular: no expone motivos personales, notas ni datos del cajero. */
+  async cuentas(memberId: string) {
+    const lista = await this.prisma.membership.findMany({ where: { memberId, estado: { not: 'anulada' } }, orderBy: { fechaInicio: 'desc' }, include: { plan: true, payments: true, congelamientos: { orderBy: { desde: 'asc' } } } });
+    return lista.map(m => {
+      const c = cuentaDe(m);
+      return { membershipId: m.id, plan: c.plan, inicio: c.inicio, vence: c.vence,
+        cuenta: { total: c.total, pagado: c.pagado, saldo: c.saldo, fechaLimiteSaldo: c.fechaLimiteSaldo, estado: c.estado },
+        congelamientos: m.congelamientos.map(p => ({ desde: formatoFecha(p.desde), hasta: formatoFecha(p.hasta) })), pausada: !!pausaActual(m) };
+    }).filter(m => m.cuenta.saldo > 0 || m.vence >= formatoFecha(hoyLima()));
   }
 
   /** Dias seguidos asistiendo, contando desde la ultima visita hacia atras. */

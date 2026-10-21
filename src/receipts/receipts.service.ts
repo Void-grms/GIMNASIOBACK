@@ -125,6 +125,12 @@ export class ReceiptsService {
     total: number;
     observacion?: string;
   }) {
+    // El cobro ya esta confirmado. Un reintento por perdida de respuesta nunca
+    // reserva otro correlativo ni cambia el snapshot del comprobante existente.
+    if (params.paymentId) {
+      const existente = await this.prisma.receipt.findUnique({ where: { paymentId: params.paymentId }, include: { items: true } });
+      if (existente) return existente;
+    }
     const ajustes = await this.settings.obtener();
     const aplicaIgv = this.settings.aplicaIgv(ajustes.regimen) && params.tipo !== 'recibo';
 
@@ -134,6 +140,7 @@ export class ReceiptsService {
 
     const montos = this.desglosar(total, aplicaIgv, ajustes.igvTasa);
 
+    let recuperado = false;
     const comprobante = await this.prisma.$transaction(async (tx) => {
       const serie = await tx.serie.upsert({
         where: { tipo_serie: { tipo: params.tipo, serie: this.serieInicial(params.tipo) } },
@@ -180,7 +187,14 @@ export class ReceiptsService {
         },
         include: { items: true },
       });
+    }).catch(async error => {
+      if (error?.code === 'P2002' && params.paymentId) {
+        const existente = await this.prisma.receipt.findUnique({ where: { paymentId: params.paymentId }, include: { items: true } });
+        if (existente) { recuperado = true; return existente; }
+      }
+      throw error;
     });
+    if (recuperado) return comprobante;
 
     // El envio al PSE va fuera de la transaccion: una demora de red no puede
     // dejar la base bloqueada ni perder el cobro.

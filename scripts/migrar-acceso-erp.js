@@ -9,7 +9,7 @@ async function migrar(prisma, databaseUrl) {
   }
   const schema = new URL(databaseUrl).searchParams.get('schema') || 'public';
   if (schema !== 'public') throw new Error('La migracion ERP requiere el esquema public');
-  const statements = ['erp-access.sql', 'membership-plans.sql', 'sunat-beta.sql'].flatMap(nombre =>
+  const statements = ['erp-access.sql', 'membership-plans.sql', 'sunat-beta.sql', 'membership-accounts.sql'].flatMap(nombre =>
     fs.readFileSync(path.join(__dirname, '..', 'prisma', nombre), 'utf8').split(/^-- statement-break\s*$/m).map(s => s.trim()).filter(s => s && !/^--[^\n]*$/.test(s)));
   const aplicado = await prisma.$transaction(async tx => {
     await tx.$queryRawUnsafe('SELECT pg_advisory_xact_lock(20261014, 1)::text AS locked');

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MS_DIA, diaLimaDe, formatoFecha, hoyLima, rangoDelDia, sumarDias } from '../common/fechas';
 import { CheckinsService } from '../checkins/checkins.service';
+import { pausaActual } from '../memberships/cuenta.util';
 
 @Injectable()
 export class DashboardService {
@@ -44,7 +45,7 @@ export class DashboardService {
     // Ingreso mensual equivalente: cada membresia vigente aporta su precio
     // prorrateado a 30 dias. Comparable entre planes de distinta duracion.
     const mrr = vigentes.reduce(
-      (suma, m) => suma + (m.precioPagado / Math.max(m.duracionDiasContratada ?? m.plan.duracionDias, 1)) * 30,
+      (suma, m) => suma + ((m.totalContratadoCentimos == null ? m.precioPagado : m.totalContratadoCentimos / 100) / Math.max(m.duracionDiasContratada ?? m.plan.duracionDias, 1)) * 30,
       0,
     );
 
@@ -87,11 +88,12 @@ export class DashboardService {
 
     const vigentes = await this.prisma.membership.findMany({
       where: { estado: 'activa', fechaFin: { gte: hoy }, fechaInicio: { lte: hoy } },
-      include: { member: true, plan: true },
+      include: { member: true, plan: true, congelamientos: true },
     });
 
     const enRiesgo = [];
     for (const membresia of vigentes) {
+      if (pausaActual(membresia, hoy)) continue;
       const ultima = await this.prisma.checkIn.findFirst({
         where: { memberId: membresia.memberId, resultado: 'permitido', tipo: 'entrada' },
         orderBy: { timestamp: 'desc' },

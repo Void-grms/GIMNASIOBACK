@@ -229,6 +229,8 @@ export async function probarMembresias(clientes: any[]) {
     return { pruebas };
   } finally {
     // Todos los registros borrados pertenecen exclusivamente a este fixture anonimo.
+    await db.membershipOperation.deleteMany({ where: { memberId: { in: ids } } });
+    await db.membershipFreeze.deleteMany({ where: { membership: { memberId: { in: ids } } } });
     await db.member.deleteMany({ where: { id: { in: ids } } });
     await db.plan.deleteMany({ where: { OR: [{ id: planId }, { id: erpId }, { nombre: { startsWith: prefijo } }] } });
   }
