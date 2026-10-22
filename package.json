@@ -22,6 +22,8 @@
     "test:pase-diario-pg": "node scripts/probar-pase-diario.cjs pg",
     "test:cuentas": "node scripts/probar-cuentas-membresia.cjs sqlite",
     "test:cuentas-pg": "node scripts/probar-cuentas-membresia.cjs pg",
+    "test:imagenes": "ts-node test/imagenes.test.ts",
+    "test:imagenes-existentes": "ts-node test/imagenes-existentes.test.ts",
     "test:carga": "node scripts/probar-carga.cjs",
     "test:importacion": "ts-node test/importacion.test.ts",
     "importar:erp": "ts-node scripts/importar-erp.ts",
@@ -53,7 +55,8 @@
     "jszip": "3.10.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "saxes": "6.0.0"
+    "saxes": "6.0.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
