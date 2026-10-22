@@ -162,3 +162,29 @@ verificador, celular, montos) y se usan tanto en los DTO como en los servicios.
 
 Las fotos se guardan en `backend/uploads/socios/` y se sirven en
 `/uploads/socios/...`. No entran al repositorio.
+
+Las fotos de socios y productos se validan y convierten a WebP en el servidor,
+con orientación corregida y sin EXIF/GPS. Perfil: recorte de hasta 480 px;
+productos: hasta 1000 px sin ampliar. Los nombres incluyen la huella del contenido:
+reemplazar la foto cambia su URL. Se limita el tamaño de entrada, los píxeles y
+la concurrencia del codificador. El navegador también comprime antes de enviar.
+Los comprobantes de pago privados conservan su contenido original y su ruta protegida.
+
+En producción, tres segundos después de arrancar, `ImagenesExistentesService`
+revisa las fotografías locales existentes en lotes y convierte una a la vez.
+Actualiza únicamente la URL que siga vigente y sólo si el WebP pesa menos.
+No descarga URLs externas ni procesa comprobantes. Conserva el archivo original
+y un manifiesto de reversión fuera de `/uploads`, en
+`PRIVATE_DIR/imagenes-webp/{socios|productos}/{id}.json`. Al subir una foto nueva
+se eliminan sus variantes anteriores y el manifiesto; la supresión del socio
+también borra todas sus fotografías. `IMAGENES_MIGRAR_AL_INICIAR=false` desactiva
+la pasada automática. En desarrollo sólo se activa expresamente con `true`.
+
+Para una reversión de una conversión antigua, usar el manifiesto privado:
+comprobar el hash del original y cambiar `fotoUrl` de `despues` a `antes` sólo si
+la fila aún apunta a `despues`. No sobrescribir una foto que haya cambiado después.
+No ejecutar la conversión en `predeploy`: necesita el volumen montado del servicio activo.
+
+Verificación aislada: `npm run test:imagenes` y
+`npx ts-node test/imagenes-existentes.test.ts`; utilizan imágenes ficticias y
+directorios temporales, sin cobrar ni modificar datos reales.

@@ -1,12 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
-import { join } from 'path';
 import { hashPassword } from '../common/password';
 import { PrismaService } from '../prisma/prisma.service';
 import { QrService } from '../qr/qr.service';
 import { SettingsService } from '../settings/settings.service';
 import { diasRestantes, formatoFecha, hoyLima } from '../common/fechas';
-import { carpetaArchivos, esPostgres } from '../common/archivos';
+import { esPostgres } from '../common/archivos';
+import { conFotoBloqueada, eliminarFotos, guardarFotoPublica } from '../common/imagenes';
 import { DURACION_ACCESO_MS, consentimientoPendiente, estadoPortal, pinAleatorio, sinSecretos, validarDniPortal } from './acceso.util';
 import { conPlanContratado } from '../plans/condiciones';
 import { cuentaDe, elegirMembresia, pausaActual } from '../memberships/cuenta.util';
@@ -276,27 +275,15 @@ export class MembersService {
    * que la base siga siendo liviana y facil de respaldar.
    */
   async guardarFoto(memberId: string, dataUrl: string) {
-    const coincide = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(
-      (dataUrl || '').trim(),
-    );
-    if (!coincide) throw new BadRequestException('La imagen no tiene un formato valido');
-
-    const binario = Buffer.from(coincide[2], 'base64');
-    if (binario.length > 2 * 1024 * 1024) {
-      throw new BadRequestException('La foto pesa mas de 2 MB. Bajala de resolucion.');
-    }
-
-    const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
-    if (!socio) throw new NotFoundException('Socio no encontrado');
-
-    const extension = coincide[1] === 'png' ? 'png' : coincide[1] === 'webp' ? 'webp' : 'jpg';
-    const carpeta = join(carpetaArchivos(), 'socios');
-    mkdirSync(carpeta, { recursive: true });
-    writeFileSync(join(carpeta, `${memberId}.${extension}`), binario);
-
-    // El sufijo obliga al navegador a recargar la foto cuando se reemplaza.
-    const fotoUrl = `/uploads/socios/${memberId}.${extension}?v=${Date.now()}`;
-    return sinSecretos(await this.prisma.member.update({ where: { id: memberId }, data: { fotoUrl } }));
+    return conFotoBloqueada('socios', memberId, async () => {
+      const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
+      if (!socio) throw new NotFoundException('Socio no encontrado');
+      if (socio.dni?.startsWith('ANON-')) throw new BadRequestException('Los datos de este socio fueron suprimidos');
+      const foto = await guardarFotoPublica('socios', memberId, dataUrl);
+      const actualizado = await this.prisma.member.update({ where: { id: memberId }, data: { fotoUrl: foto.fotoUrl } });
+      await eliminarFotos('socios', memberId, foto.fotoUrl);
+      return sinSecretos(actualizado);
+    });
   }
 
   /**
@@ -334,13 +321,12 @@ export class MembersService {
    * identidad, que es justo lo que protege la ley.
    */
   async anonimizar(memberId: string, motivo: string) {
+    return conFotoBloqueada('socios', memberId, async () => {
     const socio = await this.prisma.member.findUnique({ where: { id: memberId } });
     if (!socio) throw new NotFoundException('Socio no encontrado');
-    if (socio.dni?.startsWith('ANON')) throw new BadRequestException('Ese socio ya fue anonimizado');
-
-    if (socio.fotoUrl) {
-      const archivo = join(carpetaArchivos(), socio.fotoUrl.split('?')[0].replace(/^\/uploads\//, ''));
-      if (existsSync(archivo)) unlinkSync(archivo);
+    if (socio.dni?.startsWith('ANON')) {
+      await eliminarFotos('socios', memberId);
+      return sinSecretos(socio);
     }
 
     // Lo que el socio anoto de si mismo se va con el; los pagos y comprobantes
@@ -369,6 +355,8 @@ export class MembersService {
         activo: false,
       } });
     });
+    await eliminarFotos('socios', memberId);
     return sinSecretos(actualizado);
+    });
   }
 }

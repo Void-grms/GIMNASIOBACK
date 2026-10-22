@@ -3,8 +3,7 @@ import { Member, Prisma, Product } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { diaLimaDe, fechaDesdeTexto, hoyLima, rangoEntre } from '../common/fechas';
-import { carpetaArchivos, guardarImagen } from '../common/archivos';
-import { join } from 'path';
+import { conFotoBloqueada, eliminarFotos, guardarFotoPublica } from '../common/imagenes';
 
 export const VIGENCIA_PEDIDO_MS = 12 * 3600 * 1000;
 
@@ -102,17 +101,22 @@ export class ProductsService {
 
   /** Foto del producto para la tienda del portal. Es publica, como las de socios. */
   async guardarFoto(id: string, imagen: string) {
-    const producto = await this.prisma.product.findUnique({ where: { id } });
-    if (!producto) throw new NotFoundException('Producto no encontrado');
-    const ext = guardarImagen(imagen, join(carpetaArchivos(), 'productos'), id, 1.5 * 1024 * 1024);
-    return this.prisma.product.update({
-      where: { id },
-      data: { fotoUrl: `/uploads/productos/${id}.${ext}?v=${Date.now()}` },
+    return conFotoBloqueada('productos', id, async () => {
+      const producto = await this.prisma.product.findUnique({ where: { id } });
+      if (!producto) throw new NotFoundException('Producto no encontrado');
+      const foto = await guardarFotoPublica('productos', id, imagen);
+      const actualizado = await this.prisma.product.update({ where: { id }, data: { fotoUrl: foto.fotoUrl } });
+      await eliminarFotos('productos', id, foto.fotoUrl);
+      return actualizado;
     });
   }
 
   async quitarFoto(id: string) {
-    return this.prisma.product.update({ where: { id }, data: { fotoUrl: null } });
+    return conFotoBloqueada('productos', id, async () => {
+      const producto = await this.prisma.product.update({ where: { id }, data: { fotoUrl: null } });
+      await eliminarFotos('productos', id);
+      return producto;
+    });
   }
 
   /** Ajuste manual de inventario: reposicion, merma o correccion de conteo. */
